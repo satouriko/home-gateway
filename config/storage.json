@@ -1,0 +1,12 @@
+{
+  "routine_min_free_bytes": 4294967296,
+  "critical_free_bytes": 2147483648,
+  "background_history_bytes": 1073741824,
+  "background_keep_recent": 8,
+  "duplicate_reports_keep": 24,
+  "scratch_bytes": 134217728,
+  "reserve_bytes": 134217728,
+  "single_file_bytes": 67108864,
+  "user_chats": "never automatically delete",
+  "history_scope": "only registered background sessions, excluding live leases"
+}

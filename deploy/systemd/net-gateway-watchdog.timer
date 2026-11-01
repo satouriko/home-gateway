@@ -1,0 +1,8 @@
+[Unit]
+Description=Run independent local recovery checks
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=30
+AccuracySec=2
+[Install]
+WantedBy=timers.target

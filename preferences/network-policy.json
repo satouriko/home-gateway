@@ -1,0 +1,34 @@
+{
+  "allow_proxy_direct_fallback": false,
+  "default_rule": "MATCH,PROXY",
+  "mainland_direct": true,
+  "mode": "rule",
+  "preferences": {
+    "allow_other_regions": true,
+    "allow_proxy_direct_fallback": false,
+    "direct_domains": [],
+    "excluded_keywords": null,
+    "mainland_direct": true,
+    "mode": "rule",
+    "preferred_keywords": [
+      "美国",
+      "美國",
+      "🇺🇸",
+      "United States",
+      "USA",
+      "US"
+    ],
+    "preferred_label": "美国",
+    "proxy_domains": []
+  },
+  "preferred_region": "US",
+  "proxy_chain": [
+    "US_AUTO",
+    "OTHER_AUTO"
+  ],
+  "region_providers": {
+    "OTHER_AUTO": "other",
+    "US_AUTO": "us"
+  },
+  "scope": "user-approved household configuration"
+}

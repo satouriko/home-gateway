@@ -1,0 +1,14 @@
+[Unit]
+Description=Offline recovery independent of model connectivity
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/net-gateway-agent/broker.py --watchdog
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+TimeoutStartSec=75
+MemoryMax=128M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/net-gateway-agent /etc/net-gateway /var/lib/net-gateway /usr/local/share/net-gateway-agent/skill /var/lib/dsh-login
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH

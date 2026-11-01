@@ -1,0 +1,25 @@
+[Unit]
+Description=Transparent home gateway (Mihomo)
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+Environment=SAFE_PATHS=/etc/net-gateway
+ExecStartPre=/usr/local/bin/mihomo -t -d /var/lib/net-gateway -f /etc/net-gateway/config.json
+ExecStartPre=/usr/local/lib/net-gateway/network_setup.py apply
+ExecStart=/usr/local/bin/mihomo -d /var/lib/net-gateway -f /etc/net-gateway/config.json
+ExecStopPost=/usr/local/lib/net-gateway/network_setup.py restore
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+MemoryHigh=768M
+MemoryMax=1536M
+MemorySwapMax=0
+TasksMax=512
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/net-gateway
+[Install]
+WantedBy=multi-user.target

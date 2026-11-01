@@ -1,0 +1,24 @@
+{
+  "timezone": "Asia/Shanghai",
+  "peak_weekdays": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "peak_windows": [
+    [
+      "09:00",
+      "12:00"
+    ],
+    [
+      "14:00",
+      "18:00"
+    ]
+  ],
+  "public_holidays": [],
+  "verified_on": "2026-11-01",
+  "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "holiday_handling": "verified date overrides only; unknown holidays use conservative weekday pricing"
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Maintain confirmed US-first node selection
+After=net-gateway.service
+PartOf=net-gateway.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/net-gateway/gateway_maintain.py
+TimeoutStartSec=120
+MemoryMax=128M
+CPUQuota=25%
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/net-gateway

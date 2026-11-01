@@ -1,0 +1,11 @@
+[Unit]
+Description=Check preferred region regularly
+After=net-gateway.service
+PartOf=net-gateway.service
+[Timer]
+OnActiveSec=10
+OnUnitInactiveSec=30
+AccuracySec=2
+Unit=net-gateway-maintain.service
+[Install]
+WantedBy=net-gateway.service

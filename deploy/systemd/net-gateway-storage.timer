@@ -1,0 +1,8 @@
+[Unit]
+Description=Check storage before it can disrupt network services
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+AccuracySec=5
+[Install]
+WantedBy=timers.target

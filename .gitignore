@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.export-*/
+.env
+credentials*
+secrets*
+*.key

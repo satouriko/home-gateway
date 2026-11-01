@@ -1,0 +1,28 @@
+import unittest
+from unittest.mock import patch
+from programs import validate_source, validate_output,evaluate
+
+class ProgramBoundaryTests(unittest.TestCase):
+    def test_actual_isolated_python_process_runs_without_parent_import_paths(self):
+        source="def inspect(snapshot):\n return {'summary':'real child','action':'none','probe_domains':[]}\n"
+        with patch('programs.os.geteuid',return_value=1000):
+            self.assertEqual(evaluate(source,{}),{'summary':'real child','action':'none','probe_domains':[]})
+    def test_pure_snapshot_inspection_is_accepted(self):
+        source="def inspect(snapshot):\n    checks = snapshot.get('checks', {})\n    return {'summary': str(len(checks)), 'action': 'none', 'probe_domains': []}\n"
+        self.assertIsNotNone(validate_source(source))
+
+    def test_import_io_introspection_and_unbounded_loops_are_rejected(self):
+        for source in ["import os\ndef inspect(s): return {}", "def inspect(s):\n return open('/etc/passwd').read()", "def inspect(s):\n return s.__class__", "def inspect(s):\n while True: pass", "def inspect(s):\n return eval('1')", "def inspect(s):\n return inspect(s)"]:
+            with self.subTest(source=source),self.assertRaises(ValueError):validate_source(source)
+
+    def test_only_nondestructive_known_advice_is_accepted(self):
+        result={'summary':'proxy failed','action':'recheck_nodes','probe_domains':['www.google.com']}
+        self.assertEqual(validate_output(result),result)
+        for action in ['DIRECT','restart_dsh','shell','restore_gateway']:
+            with self.subTest(action=action),self.assertRaises(ValueError):validate_output({'summary':'x','action':action,'probe_domains':[]})
+
+    def test_probe_budget_and_domain_validation_are_enforced(self):
+        for domains in [['a.com']*4,['https://x.com?token=secret'],['169.254.169.254']]:
+            with self.subTest(domains=domains),self.assertRaises(ValueError):validate_output({'summary':'x','action':'none','probe_domains':domains})
+
+if __name__=='__main__':unittest.main()

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd /var/lib/dsh/workspace
+exec sudo -n -H -u dsh env DSH_HOME=/var/lib/dsh/state /opt/dsh/node_modules/.bin/dsh "$@"

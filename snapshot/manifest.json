@@ -1,0 +1,248 @@
+{
+  "files": {
+    "config/dsh/headless/cordis.patch.yml": {
+      "mode": 416,
+      "sha256": "4b6aab0efcb2ffe3cc6f903e962f9176fc606acaae3cf617a876afcb8cd69f3d"
+    },
+    "config/dsh/headless/package.json": {
+      "mode": 416,
+      "sha256": "563c0b6082748a6e93daad51514f01335c51fc9c44f5f88253383f18ac2557b5"
+    },
+    "config/dsh/web/cordis.patch.yml": {
+      "mode": 416,
+      "sha256": "1a46e6cd0f2127eeb957663af38834059103e316482d6ba6ebd3233ada75f0df"
+    },
+    "config/dsh/web/package.json": {
+      "mode": 416,
+      "sha256": "210068ddb9ebc4cdf395ebb53020be6ccaaedb917e74dae16296d62394626398"
+    },
+    "config/mihomo.template.json": {
+      "mode": 384,
+      "sha256": "8baf83f34dc8d04b99f890ca5f0e87f04064857cf08dac3a9fd1f331137589e0"
+    },
+    "config/pricing.json": {
+      "mode": 420,
+      "sha256": "80a073ecccb0e593ec612ac3c24f9d06b07bde0e696b4e227ea83c850bcaf922"
+    },
+    "config/proxy-domains.yaml": {
+      "mode": 384,
+      "sha256": "020fa1f40078281050c8ec81f8a35ffe7f24d744dc0c99c2eadb989ee84ad5eb"
+    },
+    "config/resolv.conf": {
+      "mode": 420,
+      "sha256": "9de168d551adae77eba07124100b98278c1726f330240958346febed6d5e6632"
+    },
+    "config/storage.json": {
+      "mode": 420,
+      "sha256": "a99a38be8154442b965af7597abdc9023256e8711a05d28b227af6ece076a9d9"
+    },
+    "deploy/bin/dsh": {
+      "mode": 493,
+      "sha256": "a48d854ed0ed4b00e9130b5ce75905c183a352374306aa7dd0c6e44c10a007ad"
+    },
+    "deploy/bin/gateway-agent": {
+      "mode": 493,
+      "sha256": "b4a2c8e572e96446bc10c57afddf71710c1839baf15cc0f508d790bc6d1569f7"
+    },
+    "deploy/journald.conf": {
+      "mode": 420,
+      "sha256": "1be120275925f5040c93bc9b1745b4e96965998f2fd821dad453cf21ef48f248"
+    },
+    "deploy/systemd/dsh.service": {
+      "mode": 420,
+      "sha256": "79a35c1bb6fc25b90544fc7f9a35c77a89e2b8e64f049388acfe7aa0e594b730"
+    },
+    "deploy/systemd/dsh.service.d/gateway-operator.conf": {
+      "mode": 420,
+      "sha256": "0c0773b674c484ab6a6d537957826e6e33b8c48fb33368c5de1ffbdd782d5bff"
+    },
+    "deploy/systemd/dsh.service.d/storage.conf": {
+      "mode": 420,
+      "sha256": "39c2e27537db84d7c53e8b0d90ed46a6f347bba6b9acf2560d9864115e1603d4"
+    },
+    "deploy/systemd/net-gateway-agent.service": {
+      "mode": 420,
+      "sha256": "d761b1a335aa33b7eeed072a27dfb399edf582ffd6d8b1dd8600f1b69032aeb2"
+    },
+    "deploy/systemd/net-gateway-ai-patrol.service": {
+      "mode": 420,
+      "sha256": "64b96e58c4e2f3f17dab9bbe8eaad9dce1ca904998b9471830aab4767db98bcb"
+    },
+    "deploy/systemd/net-gateway-control-route.service": {
+      "mode": 420,
+      "sha256": "54e8c22fbff9bbece23d55e418d89d72133777e38fafac0ba1362b33cf523948"
+    },
+    "deploy/systemd/net-gateway-maintain.service": {
+      "mode": 420,
+      "sha256": "071b7de4a9a59adfc2f27852c59096d81d92fbaacc99b0d6ae8ba76123ba5d7d"
+    },
+    "deploy/systemd/net-gateway-maintain.timer": {
+      "mode": 420,
+      "sha256": "6ec5a0b2ffda697c1573bd37cff0431cef4cf5aad0b38e0c5f7d0bc848608c91"
+    },
+    "deploy/systemd/net-gateway-patrol.service": {
+      "mode": 420,
+      "sha256": "941ae32a6d3adedbdb89fa4a2514f5798f6c7011e5ddaf0ca16a0ba65e8162f0"
+    },
+    "deploy/systemd/net-gateway-patrol.timer": {
+      "mode": 420,
+      "sha256": "3104566d9933ab6b16806e582c4c57e9be0890bc9325c63f93ea4f32e05a811f"
+    },
+    "deploy/systemd/net-gateway-storage.service": {
+      "mode": 420,
+      "sha256": "fa736b6a50ba555587fde9accf8354c7a383663be0df6bcbb0fa08187abff684"
+    },
+    "deploy/systemd/net-gateway-storage.timer": {
+      "mode": 420,
+      "sha256": "f3658117e16ad783db79f63e2b200a532d3458fcbba6676c41f7ca862f7eb31e"
+    },
+    "deploy/systemd/net-gateway-watchdog.service": {
+      "mode": 420,
+      "sha256": "f4052ab31800df081257a7797c9c4d11e268b15caead08e894d0927270a84e33"
+    },
+    "deploy/systemd/net-gateway-watchdog.timer": {
+      "mode": 420,
+      "sha256": "e3aca49351d128876bc75a1dfeba6db007dd84d9503997048a630ef210f94786"
+    },
+    "deploy/systemd/net-gateway.service": {
+      "mode": 420,
+      "sha256": "f5737ad98104d05c39f47753163d3035ce7b3cff0a0b577df1670f5f4743a3f5"
+    },
+    "deploy/systemd/net-gateway.service.d/operator-route.conf": {
+      "mode": 420,
+      "sha256": "a90cb3774884c92e91a67545d1df69a643313f7ae198576ba41c04f623d81601"
+    },
+    "docs/operator/BACKGROUND.md": {
+      "mode": 420,
+      "sha256": "88b7712426dcde8a8e4ad64b5df10cab7247c15f0a001246fe4b92028d9b653d"
+    },
+    "docs/operator/CONTRACTS.md": {
+      "mode": 420,
+      "sha256": "b46c722fb9ec63ad5e721baa88dd4cbdb4341d94683870b284dffef15011adb8"
+    },
+    "preferences/audit-plan.json": {
+      "mode": 384,
+      "sha256": "76d2c0219356e39822dd326a85a6c568fe8935591238f92de62f2fbd7e89f749"
+    },
+    "preferences/network-policy.json": {
+      "mode": 384,
+      "sha256": "0ea307b4e7775914614a4ac8b1ecb091135222c890991737efaf3358e8959b35"
+    },
+    "runtime/dsh/package-lock.json": {
+      "mode": 420,
+      "sha256": "4403cbf2743372c4acf2d1601645ea2b9367f34b7a1561ee5334f8beb02b7c3f"
+    },
+    "runtime/dsh/package.json": {
+      "mode": 420,
+      "sha256": "87ce8e834f9985e7bb30078b8962e822cad10d1c44c5422d49b1cb73e9d6ea09"
+    },
+    "snapshot/published/diagnostic-active.json": {
+      "mode": 384,
+      "sha256": "b0e1f9b5360934d9edcfdd49d0bd47a03fe9f6fc4e86f8cdd7a754d1ba101f95"
+    },
+    "snapshot/published/tool-active.json": {
+      "mode": 384,
+      "sha256": "a190d00d673a53e383b6ee846fa666adfd1979fdeb2cdfa01cede0769b9ffc24"
+    },
+    "src/dsh/AGENTS.md": {
+      "mode": 416,
+      "sha256": "d2eda642f053fe933402be7618d41c222a1d002da0d404277a5e255cf5deeb72"
+    },
+    "src/dsh/identity.txt": {
+      "mode": 420,
+      "sha256": "1747848d4fb1d83ecc7005eb296f40224bf81a9cf295c69c843506199abf07de"
+    },
+    "src/dsh/lan-auto-login.mjs": {
+      "mode": 416,
+      "sha256": "3cfd9ab0ab7fea0e670dd4f07f505c40a5c585dd440a32d5ec0b97d7cd1b6f7d"
+    },
+    "src/dsh/operator.mjs": {
+      "mode": 420,
+      "sha256": "c67d3b044135b1cea7b25be334a4ca6b0ad96efdf7778d3ceb9e754f5c342a4a"
+    },
+    "src/dsh/skill/SKILL.md": {
+      "mode": 420,
+      "sha256": "41e24daf16ef20103c9293bbe3e6deeab58c24720f3de7cbb59980427737eddc"
+    },
+    "src/gateway/gateway_maintain.py": {
+      "mode": 493,
+      "sha256": "b316fdd8c4e78e7576193439785dfcdb83e395738d0d120e316ee339a8cb6e8b"
+    },
+    "src/gateway/network_setup.py": {
+      "mode": 493,
+      "sha256": "adaebdc61357724c61a28abcd69943ff343b93b317009fc064f9a6f7a2ee1579"
+    },
+    "src/maintained/diagnostic.py": {
+      "mode": 384,
+      "sha256": "156afea5703f12c5cd0c3197e108b20f3ab589da308ffe3bb2a53c4ce6bcfbb7"
+    },
+    "src/maintained/tool.py": {
+      "mode": 384,
+      "sha256": "415a98bed8d1e878dca5346a37a5e2de1eda4295778e7fd2db768374f23cc75b"
+    },
+    "src/operator/ai_job.py": {
+      "mode": 493,
+      "sha256": "19291f2fc4fea8c1b23a8aa9cf3403e5af9ef87a9b1f6f7631ee9bffe0f20dfd"
+    },
+    "src/operator/bounded.py": {
+      "mode": 493,
+      "sha256": "9a0debad3b39fcad8bb85592e7e4d18f57e5539bf9edbf35209b17bc6d7e08cb"
+    },
+    "src/operator/broker.py": {
+      "mode": 493,
+      "sha256": "52ea64061ecd9578c16b44ffeb1b6008ea876cd4fbaae9deca1b833e76a76149"
+    },
+    "src/operator/control_route.py": {
+      "mode": 493,
+      "sha256": "5881fec968d5df3e81caccab54847681127558c65d063b0ed5730296b4b90805"
+    },
+    "src/operator/credential_guard.mjs": {
+      "mode": 493,
+      "sha256": "6b9ecd40fdfd727d2dd61b9e48e0d994b224e896b8757e9ed6a45890c3fe8ca3"
+    },
+    "src/operator/extensions.py": {
+      "mode": 493,
+      "sha256": "b5e00d5057f7ddb9b891f2883f6435ca8a81b3ed6275e8f352e84b5a9b806562"
+    },
+    "src/operator/patrol.py": {
+      "mode": 493,
+      "sha256": "1b27905ab61c8c26d5f1acff2d7cf791a96560df73e468496f720c2f3bc84700"
+    },
+    "src/operator/policy.py": {
+      "mode": 493,
+      "sha256": "20e9a12e2a23cb9b7a460d1bfc1b4ba5cbe8ac56d3d757c95dbfd5e806c4e24e"
+    },
+    "src/operator/pricing.py": {
+      "mode": 493,
+      "sha256": "4c9f7ae9035e0cfbda77aa76eab5cecc75f00ad913c9bf79b9dd81655216c15a"
+    },
+    "src/operator/programs.py": {
+      "mode": 493,
+      "sha256": "8056d43a9d9f5c4d1edb25b038581ce1488e709a3017a0420c4b71900284b8a1"
+    },
+    "src/operator/skills.py": {
+      "mode": 493,
+      "sha256": "c4eac73d47ae23eb44c6b35174fa7c14624a82fb4b638c2bc83ad89f3e0ac755"
+    },
+    "src/operator/storage.py": {
+      "mode": 493,
+      "sha256": "d8931241d34ea7be7888d79e42ee53b4396535e0774f58627cb9c0879a498029"
+    },
+    "src/operator/user_policy.py": {
+      "mode": 493,
+      "sha256": "2c6ed2ad0fb512d7accfd65d0868487729b21747df53ac3944184d6090b9acc1"
+    },
+    "tests/maintained/test_program_worker.py": {
+      "mode": 384,
+      "sha256": "ac181ddb99fc02d85b6667f2b0f9f398c4647425a880713f2f93da2deb9c6180"
+    }
+  },
+  "format": 1,
+  "runtime": {
+    "mihomo": "1.19.33",
+    "mihomo_sha256": "8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0",
+    "node": "24.14.1",
+    "os": "Debian 13 ARM64"
+  },
+  "scope": "programs and preferences only"
+}

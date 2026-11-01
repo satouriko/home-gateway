@@ -1,0 +1,14 @@
+[Unit]
+Description=Protected upstream route for the DSH operator
+Wants=network-online.target
+After=network-online.target
+Before=dsh.service net-gateway.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /usr/local/lib/net-gateway-agent/control_route.py
+NoNewPrivileges=true
+ProtectSystem=strict
+CapabilityBoundingSet=CAP_NET_ADMIN
+[Install]
+WantedBy=multi-user.target

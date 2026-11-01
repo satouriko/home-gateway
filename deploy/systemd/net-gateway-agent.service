@@ -1,0 +1,24 @@
+[Unit]
+Description=Private tools for the household network assistant
+After=network-online.target net-gateway.service
+Wants=network-online.target
+[Service]
+User=root
+Group=gateway-operators
+ExecStart=/usr/bin/python3 /usr/local/lib/net-gateway-agent/broker.py
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+RuntimeDirectory=net-gateway-agent
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=5
+MemoryMax=192M
+CPUQuota=50%
+TasksMax=40
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/net-gateway-agent /etc/net-gateway /var/lib/net-gateway /usr/local/share/net-gateway-agent/skill /var/lib/dsh-login
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+[Install]
+WantedBy=multi-user.target

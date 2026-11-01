@@ -1,0 +1,109 @@
+import contextlib
+import copy
+import io
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+import broker
+
+def healthy_result():
+    return {'status':{'services':{'net-gateway.service':{'ActiveState':'active'}}},'checks':{
+      'gateway_dns_cn':{'ok':True,'result':{'rcode':0,'answer_count':1}},
+      'gateway_dns_foreign':{'ok':True,'result':{'rcode':0,'answer_count':1}},
+      'bootstrap_dns_api':{'ok':True,'result':{'rcode':0,'answer_count':1}},
+      'mainland_https':{'ok':True,'result':{'http_status':200}},
+      'proxy_https':{'ok':True,'result':{'http_status':204,'expected_health_status':True}}}}
+
+class RecoveryTests(unittest.TestCase):
+    def test_policy_metadata_recovers_current_preferences_instead_of_initial_defaults(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)):
+            p=Path(folder);(p/'known-good').mkdir()
+            expected={**broker.INSTALL_POLICY,'preferences':{'preferred_label':'日本'}}
+            (p/'known-good/policy.json').write_text(json.dumps(expected))
+            (p/'approved-policy.json').write_text('broken')
+            self.assertEqual(broker.current_policy(),expected)
+    def test_login_guard_replaces_a_symlink_without_touching_its_target(self):
+        import os
+        with tempfile.TemporaryDirectory() as folder:
+            state=Path(folder)/'state';state.mkdir();login=Path(folder)/'login';login.mkdir()
+            source=Path(folder)/'outside';source.write_text('untouched')
+            credentials=login/'credentials.yaml';credentials.symlink_to(source)
+            (state/'bootstrap-login.yaml').write_text('version: 1\nrecords: {}\n')
+            with patch.object(broker,'STATE',state),patch.object(broker,'LOGIN',credentials),patch.object(broker.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid())):
+                broker.guard_login()
+            self.assertFalse(credentials.is_symlink());self.assertEqual(source.read_text(),'untouched')
+            self.assertEqual(len(list(login.glob('invalid-*'))),1)
+    def test_login_guard_failure_cannot_block_network_recovery(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)),patch.object(broker,'boot_id',return_value='boot'),patch.object(broker,'restore_gateway') as restore,patch.object(broker,'guard_login',side_effect=PermissionError),patch.object(broker,'service',return_value={'ActiveState':'active'}),patch.object(broker,'agent_ready',return_value=True),patch('control_route.apply'),contextlib.redirect_stdout(io.StringIO()):
+            (Path(folder)/'pending.json').write_text(json.dumps({'deadline':0,'boot_id':'boot'}))
+            broker.watchdog();restore.assert_called_once()
+    def test_transaction_lock_is_shared_with_another_process(self):
+        import subprocess,sys
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)):
+            child=subprocess.Popen([sys.executable,'-c','import fcntl,sys,time;f=open(sys.argv[1],"a");fcntl.flock(f,fcntl.LOCK_EX);print("ready",flush=True);time.sleep(10)',str(Path(folder)/'transaction.lock')],stdout=subprocess.PIPE,text=True)
+            try:
+                self.assertEqual(child.stdout.readline().strip(),'ready')
+                with self.assertRaises(ValueError):broker.acquire_transaction()
+                self.assertTrue(broker.LOCK.acquire(blocking=False));broker.LOCK.release()
+            finally:child.terminate();child.wait();child.stdout.close()
+    def test_running_service_with_broken_dns_is_not_healthy(self):
+        result=healthy_result();result['checks']['gateway_dns_cn']['result']['answer_count']=0
+        self.assertFalse(broker.verification_healthy(result))
+
+    def test_running_service_with_proxy_failure_is_not_healthy(self):
+        result=healthy_result();result['checks']['proxy_https']={'ok':False,'error':'TimeoutError'}
+        self.assertFalse(broker.verification_healthy(result))
+
+    def test_all_probes_healthy_is_accepted(self):self.assertTrue(broker.verification_healthy(healthy_result()))
+
+    def test_failed_repair_remains_armed_and_cannot_extend_deadline(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(broker,'STATE',Path(folder)), patch.object(broker,'command'), patch.object(broker,'boot_id',return_value='boot'):
+            result=healthy_result();result['checks']['proxy_https']={'ok':False,'error':'TimeoutError'}
+            with patch.object(broker,'diagnose',return_value=result):
+                report=broker.repair('recheck_nodes')
+            self.assertFalse(report['verified_healthy'])
+            pending=Path(folder)/'pending.json';before=pending.read_bytes()
+            with self.assertRaises(ValueError):broker.repair('recheck_nodes')
+            self.assertEqual(pending.read_bytes(),before)
+
+    def test_expired_repair_recovers_without_model_or_broker_connection(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(broker,'STATE',Path(folder)), patch.object(broker,'boot_id',return_value='boot'), patch.object(broker,'restore_gateway') as restore, patch.object(broker,'service',return_value={'ActiveState':'active'}), patch.object(broker,'agent_ready',return_value=True), patch('control_route.apply'), contextlib.redirect_stdout(io.StringIO()):
+            pending=Path(folder)/'pending.json';pending.write_text(json.dumps({'deadline':0,'boot_id':'boot'}))
+            broker.watchdog()
+            restore.assert_called_once();self.assertFalse(pending.exists())
+
+    def test_unresponsive_agent_is_restarted_without_a_model(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(broker,'STATE',Path(folder)), patch.object(broker,'service',return_value={'ActiveState':'active'}), patch.object(broker,'agent_ready',return_value=False), patch.object(broker,'command') as command, patch('control_route.apply'), contextlib.redirect_stdout(io.StringIO()):
+            broker.watchdog()
+            self.assertIn(('systemctl','restart','dsh.service'),[call.args for call in command.call_args_list])
+
+    def test_restore_validates_and_restores_checkpoint_policy_as_a_pair(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state=Path(folder)/'state';state.mkdir();config=Path(folder)/'config.json'
+            saved={'rule-providers':{'proxy-domains':{'path':'old'}}}
+            approved={'version':'old-approved'}
+            (state/'known-good-config.json').write_text(json.dumps(saved))
+            (state/'known-good-policy.json').write_text(json.dumps(approved))
+            (state/'known-good-rules.yaml').write_text('payload: []')
+            with patch.object(broker,'STATE',state),patch.object(broker,'CONFIG',config),patch.object(broker,'command'),patch.object(broker,'validate_baseline') as validate,patch.object(broker.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=999)):
+                broker.restore_gateway()
+                self.assertEqual(validate.call_args.args[2],approved)
+                self.assertEqual(json.loads((state/'approved-policy.json').read_text()),approved)
+
+    def test_failed_policy_change_keeps_old_checkpoint_and_arms_recovery(self):
+        from test_user_policy import UserPolicyTests
+        with tempfile.TemporaryDirectory() as folder:
+            state=Path(folder)/'state';state.mkdir();(state/'known-good').mkdir()
+            config=Path(folder)/'config.json';config.write_text(json.dumps(UserPolicyTests().fixture()))
+            old={'mode':'rule','proxy_chain':['US_AUTO','OTHER_AUTO'],'region_providers':{'US_AUTO':'us','OTHER_AUTO':'other'},'default_rule':'MATCH,PROXY'}
+            (state/'approved-policy.json').write_text(json.dumps(old))
+            broken=healthy_result();broken['checks']['proxy_https']={'ok':False}
+            with patch.object(broker,'STATE',state),patch.object(broker,'CONFIG',config),patch.object(broker,'command'),patch.object(broker,'api'),patch.object(broker,'diagnose',return_value=broken),patch.object(broker,'checkpoint') as checkpoint,patch.object(broker.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=999)):
+                result=broker.policy_action('policy_apply',{'preferred_label':'日本','preferred_keywords':['日本']},{'id':'test-request','text':'更改地区偏好'})
+            self.assertFalse(result['verified_healthy']);self.assertTrue(result['rollback_armed'])
+            self.assertTrue((state/'pending.json').exists());checkpoint.assert_not_called()
+
+if __name__=='__main__':unittest.main()

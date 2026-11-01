@@ -1,0 +1,12 @@
+[Unit]
+Description=Autonomous network observation and maintenance dispatcher
+After=net-gateway-agent.service
+Wants=net-gateway-agent.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/net-gateway-agent/patrol.py
+TimeoutStartSec=150
+MemoryMax=192M
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/net-gateway-agent /run/net-gateway-agent

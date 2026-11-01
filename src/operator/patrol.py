@@ -1,0 +1,208 @@
+"""Autonomous observation, bounded conventional repairs and scheduled AI maintenance."""
+import grp
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import time
+import hashlib
+import shutil
+from programs import inspect_active
+from pricing import routine_allowed, pricing_state
+
+STATE=Path('/var/lib/net-gateway-agent')
+SOCKET='/run/net-gateway-agent/control.sock'
+AI_SERVICE='net-gateway-ai-patrol.service'
+CONTEXT=Path('/run/net-gateway-agent/patrol-context.json')
+
+def preempt_needed(state,diagnosis,job,context):
+    faults=fault_keys(diagnosis)
+    return bool(faults and fault_signature(diagnosis)!=state.get('last_ai_fingerprint') and job in ['active','activating'] and not context.get('urgent'))
+
+def fault_keys(diagnosis):
+    faults=[]
+    direct=diagnosis.get('status',{}).get('policy',{}).get('mode')=='direct'
+    if diagnosis.get('status',{}).get('services',{}).get('net-gateway.service',{}).get('ActiveState')!='active':faults.append('gateway_service')
+    if diagnosis.get('status',{}).get('storage',{}).get('critical'):faults.append('disk_space')
+    for name,item in diagnosis.get('checks',{}).items():
+        if direct and name in ['gateway_dns_foreign','proxy_https']:continue
+        result=item.get('result',{})
+        if not item.get('ok') or ('rcode' in result and (result['rcode']!=0 or result.get('answer_count',0)<1)) or result.get('expected_health_status') is False:
+            faults.append(name)
+    return sorted(set(faults))
+
+def fault_signature(diagnosis):
+    faults=fault_keys(diagnosis)
+    evidence={name:{key:diagnosis.get('checks',{}).get(name,{}).get('result',{}).get(key) for key in ['rcode','http_status','expected_health_status']} for name in faults}
+    for name in faults:evidence[name]['error']=diagnosis.get('checks',{}).get(name,{}).get('error')
+    return hashlib.sha256(json.dumps({'faults':faults,'evidence':evidence,'provider_counts':diagnosis.get('status',{}).get('provider_counts',{})},sort_keys=True).encode()).hexdigest()[:20]
+
+def urgent_ai_needed(state,diagnosis,now):
+    return bool(fault_keys(diagnosis) and (fault_signature(diagnosis)!=state.get('last_ai_fingerprint') or
+        (state.get('last_ai_failed') and now-state.get('last_ai_at',0)>=6*3600 and state.get('failed_retries_today',0)<3)))
+
+def should_run_ai(state, diagnosis, now):
+    faults=fault_keys(diagnosis)
+    if urgent_ai_needed(state,diagnosis,now):return True
+    if not routine_allowed(now) or state.get('pause_routine'):return False
+    budget=state.get('audit_plan',{}).get('daily_budget',6)
+    if len([at for at in state.get('routine_run_times',[]) if now-at<86400])>=budget:return False
+    if faults:return audit_due(state,now) and now-state.get('last_ai_at',0)>=audit_interval(state,now)*3600
+    if state.get('last_ai_at',0)==0 and not state.get('diagnostic_program',{}).get('active'):return True
+    if audit_due(state,now) and now-state.get('last_routine_ai_at',0)>=2*3600:return True
+    review=state.get('review_request')
+    return bool(review and now-state.get('last_routine_ai_at',0)>=2*3600 and (review['fingerprint'] not in state.get('reviewed',{}) or state.get('last_ai_failed')))
+
+def audit_interval(state,now):
+    plan=state.get('audit_plan',{});version=state.get('diagnostic_program',{}).get('version')
+    if plan.get('expires_at',0)>now and plan.get('for_program_version')==version:
+        return max(plan['interval_hours'],24/plan.get('daily_budget',6))
+    age=now-state.get('program_started_at',now);samples=state.get('healthy_samples',0)
+    if age>=7*86400 and samples>=2000 and state.get('successful_audits',0)>=3:return 24
+    if age>=3*86400 and samples>=720:return 12
+    return 4
+
+def audit_due(state,now):
+    samples=state.get('audit_rollup',{}).get('samples',0)
+    last=state.get('last_independent_audit_at',state.get('last_ai_at',now))
+    interval=audit_interval(state,now)*3600
+    periodic=now-last>=interval and samples>=8
+    version=state.get('diagnostic_program',{}).get('version')
+    changed=version and version!=state.get('last_audited_program_version',version) and now-last>=min(interval,4*3600) and samples>=8
+    retry=state.get('last_ai_failed') and state.get('last_ai_kind')=='independent_audit' and now-state.get('last_ai_at',0)>=interval
+    return bool(periodic or changed or retry)
+
+def repair_choice(diagnosis):
+    faults=fault_keys(diagnosis)
+    if 'gateway_service' in faults:return 'restore_gateway'
+    if 'bootstrap_dns_api' in faults:return None
+    if any(name in faults for name in ['gateway_dns_cn','gateway_dns_foreign']):return 'restore_gateway'
+    if 'proxy_https' in faults and diagnosis.get('checks',{}).get('mainland_https',{}).get('ok'):return 'recheck_nodes'
+    return None
+
+def call(request):
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+        connection.settimeout(140);connection.connect(SOCKET);connection.sendall(json.dumps(request).encode()+b'\n')
+        data=json.loads(connection.makefile('rb').readline(1048576))
+    if not data.get('ok'):raise ValueError(data.get('message','gateway operation failed'))
+    return data['result']
+
+def save(path,data,group=None):
+    temp=path.with_suffix('.next')
+    with temp.open('w') as target:
+        temp.chmod(0o640 if group else 0o600)
+        if group:os.chown(temp,0,grp.getgrnam(group).gr_gid)
+        json.dump(data,target,ensure_ascii=False);target.flush();os.fsync(target.fileno())
+    temp.replace(path)
+
+def main():
+    path=STATE/'patrol.json';state=json.loads(path.read_text()) if path.exists() else {}
+    now=time.time();diagnosis=call({'operation':'diagnose'});faults=fault_keys(diagnosis)
+    history=state.get('history',[])
+    history.append({'at':now,'faults':faults,'proxy_ms':diagnosis.get('checks',{}).get('proxy_https',{}).get('result',{}).get('elapsed_ms')})
+    history=history[-96:]
+    snapshot={**diagnosis,'history':history[-24:]}
+    if state.get('last_quality'):snapshot['quality_summary']={'preferred_pool':state['last_quality'].get('node_pools',{}).get('us',[]),'active_domains':state['last_quality'].get('active_domains',{})}
+    program=inspect_active(snapshot)
+    if program.get('version')!=state.get('confidence_program_version'):
+        state.update(confidence_program_version=program.get('version'),program_started_at=now,healthy_samples=0,successful_audits=0)
+    state['healthy_samples']=state.get('healthy_samples',0)+1 if not faults else 0
+    state.setdefault('last_independent_audit_at',state.get('last_ai_at') or now)
+    state.setdefault('last_audited_program_version',program.get('version'))
+    rollup=state.setdefault('audit_rollup',{'samples':0,'fault_counts':{}});rollup['samples']+=1
+    for name in faults:rollup['fault_counts'][name]=rollup['fault_counts'].get(name,0)+1
+    tickets=state.get('tickets',{})
+    if faults:
+        key='|'.join(faults)
+        ticket=tickets.setdefault(key,{'first_seen':now,'occurrences':0,'state':'open'})
+        ticket.update(last_seen=now,occurrences=ticket['occurrences']+1,state='open')
+        state['healthy_streak']=0
+    else:
+        state['healthy_streak']=state.get('healthy_streak',0)+1
+        if state['healthy_streak']>=3:
+            for ticket in tickets.values():ticket.update(state='resolved',verified_at=now)
+    state.update(checked_at=now,history=history,tickets=dict(list(tickets.items())[-24:]),last_diagnosis=diagnosis,diagnostic_program=program)
+    action=repair_choice(diagnosis)
+    advised=program.get('result',{}).get('action')
+    if not action and advised in ['recheck_nodes','refresh_subscription'] and diagnosis['status'].get('policy',{}).get('mode')!='direct':action=advised
+    if action and now-state.get('last_auto_repair_at',0)>=900 and not diagnosis['status'].get('pending_recovery'):
+        state['last_auto_repair_at']=now
+        try:state['last_auto_repair']=call({'operation':action})
+        except Exception as error:state['last_auto_repair']={'operation':action,'error':str(error)}
+        verification=state['last_auto_repair'].get('verification')
+        if verification:
+            before=faults;diagnosis=verification;faults=fault_keys(diagnosis)
+            history[-1].update(faults_before_repair=before,faults=faults)
+            if not faults:
+                key='|'.join(before)
+                if key in tickets:tickets[key].update(state='resolved',verified_at=now)
+            repairs=[event for event in state.get('repair_events',[]) if now-event['at']<86400]
+            repairs.append({'at':now,'signature':'|'.join(before),'recovered':not faults});state['repair_events']=repairs[-32:]
+            if sum(event['signature']=='|'.join(before) for event in repairs)>=3:
+                state['review_request']={'fingerprint':'recurrence:'+'|'.join(before)+':'+str(int(now//86400)),'reason':'same local repair recurred at least three times within a day'}
+    elif faults:
+        # A transient failed probe should not buy a model call.
+        confirmation=call({'operation':'diagnose'});diagnosis=confirmation;faults=fault_keys(diagnosis)
+        history[-1]['faults_after_confirmation']=faults
+    if program.get('rolled_back'):
+        state['review_request']={'fingerprint':'program-failed:'+str(program.get('failed_version')),'reason':'maintained diagnostic program failed and was rolled back'}
+    if program.get('result',{}).get('review_request'):state['review_request']=program['result']['review_request']
+    state.update(last_diagnosis=diagnosis)
+    for domain in program.get('result',{}).get('probe_domains',[])[:3]:
+        try:
+            result=call({'operation':'probe','target':domain});state.setdefault('tracked_probes',{})[domain]=result
+            diagnosis['checks']['target:'+domain]={'ok':True,'result':result}
+        except Exception as error:
+            result={'error':type(error).__name__};state.setdefault('tracked_probes',{})[domain]=result
+            diagnosis['checks']['target:'+domain]={'ok':False,**result}
+    faults=fault_keys(diagnosis)
+    quality=None
+    if now-state.get('last_quality_at',0)>=1800 or faults:
+        try:quality=call({'operation':'quality'});state.update(last_quality_at=now,last_quality=quality)
+        except Exception:pass
+    job=subprocess.run(['systemctl','is-active',AI_SERVICE],capture_output=True,text=True).stdout.strip()
+    last_result=subprocess.run(['systemctl','show',AI_SERVICE,'-p','Result','--value'],capture_output=True,text=True).stdout.strip()
+    state['last_ai_failed']=job not in ['active','activating'] and last_result not in ['','success']
+    if job not in ['active','activating'] and last_result=='success' and state.get('last_ai_kind')=='independent_audit' and state.get('audit_completed_at')!=state.get('last_ai_at'):
+        state.update(audit_completed_at=state['last_ai_at'],successful_audits=state.get('successful_audits',0)+1)
+    plan=STATE/'audit-plan.json';state['audit_plan']=json.loads(plan.read_text()) if plan.exists() else {'daily_budget':6}
+    if time.strftime('%Y-%m-%d',time.gmtime(now))!=state.get('retry_day'):
+        state.update(retry_day=time.strftime('%Y-%m-%d',time.gmtime(now)),failed_retries_today=0)
+    disk=STATE/'storage.json';storage=json.loads(disk.read_text()) if disk.exists() else {}
+    state['pause_routine']=storage.get('pause_routine',False) or shutil.disk_usage('/').free<4*1024**3
+    running_context=json.loads(CONTEXT.read_text()) if CONTEXT.exists() else {}
+    if preempt_needed(state,diagnosis,job,running_context):
+        subprocess.run(['systemctl','stop',AI_SERVICE],check=True,timeout=15)
+        state['routine_preempted_at']=now;job='inactive'
+    if faults and job in ['active','activating'] and fault_signature(diagnosis)!=state.get('last_ai_fingerprint'):
+        running_context.update(urgent=True,observed_at=now,diagnosis=diagnosis,maintenance_trigger='additional_fault')
+        save(CONTEXT,running_context,'gateway-operators')
+    window=[value for value in state.get('ai_run_times',[]) if now-value<86400]
+    if should_run_ai(state,diagnosis,now) and job not in ['active','activating']:
+        urgent=urgent_ai_needed(state,diagnosis,now)
+        kind='anomaly' if urgent else ('independent_audit' if audit_due(state,now) or faults else 'evidence_driven_improvement')
+        context={'observed_at':now,'diagnosis':diagnosis,'history':history[-16:],'tickets':state['tickets'],
+            'diagnostic_program':program,'tracked_probes':state.get('tracked_probes',{}),
+            'maintenance_trigger':kind,'audit_rollup':rollup,
+            'urgent':urgent,'pricing':pricing_state(now),
+            'review_request':state.get('review_request'),'storage':storage,
+            'quality_summary':{'preferred_pool':(quality or state.get('last_quality',{})).get('node_pools',{}).get('us',[]),
+                               'active_domains':(quality or state.get('last_quality',{})).get('active_domains',{})}}
+        save(CONTEXT,context,'gateway-operators')
+        subprocess.run(['systemctl','start','--no-block',AI_SERVICE],check=True)
+        if state['last_ai_failed']:state['failed_retries_today']=state.get('failed_retries_today',0)+1
+        state.update(last_ai_at=now,last_ai_kind=kind,last_ai_faults=faults,last_ai_fingerprint=fault_signature(diagnosis) if faults else None,ai_run_times=[*window,now])
+        if kind=='independent_audit':state.update(last_independent_audit_at=now,last_audited_program_version=program.get('version'),audit_rollup={'samples':0,'fault_counts':{}})
+        if not urgent:
+            state['last_routine_ai_at']=now
+            state['routine_run_times']=[at for at in state.get('routine_run_times',[]) if now-at<86400]+[now]
+            if state.get('review_request'):
+                reviewed=state.setdefault('reviewed',{});reviewed[state['review_request']['fingerprint']]=now;state['reviewed']=dict(list(reviewed.items())[-32:])
+    if not faults:state.update(last_ai_faults=[],last_ai_fingerprint=None)
+    state['pricing']=pricing_state(now)
+    state['ai_job_state']=job
+    save(path,state)
+    print(json.dumps({'patrol':'complete','faults':faults,'ai_triggered_at':state.get('last_ai_at'),'at':now}))
+
+if __name__=='__main__':main()

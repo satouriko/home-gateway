@@ -1,0 +1,8 @@
+[Unit]
+Description=Inspect the network before users complain
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=180
+AccuracySec=5
+[Install]
+WantedBy=timers.target
