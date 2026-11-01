@@ -80,6 +80,10 @@ def stage(repository, destination, credentials, uid=999):
             absolute = backup.SOURCE_MAP[name]
             mode = manifest['files'][name]['mode'] & 0o777
             if mode & 0o022: raise ValueError('unsafe program/configuration permissions')
+            # Public exported modules must remain readable after UID/GID remapping.
+            # Private state and credentials keep their separately assigned modes.
+            if absolute.startswith('/usr/local/share/net-gateway-agent/'):
+                mode |= 0o044
             write(absolute, data, mode)
         elif name.startswith('tests/maintained/'):
             write('/var/lib/dsh/workspace/network-maintainer/tests/' + Path(name).name, data)

@@ -16,8 +16,9 @@ import time
 from urllib.parse import urlsplit
 
 CODE = ('user_policy.py patrol.py bounded.py policy.py extensions.py programs.py broker.py '
-        'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py').split()
-DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'native-maintenance.mjs', 'broker-client.mjs', 'maintenance-prompt.txt', 'BACKGROUND.md', 'skill/SKILL.md']
+        'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py overview.py').split()
+DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'native-maintenance.mjs', 'broker-client.mjs', 'maintenance-prompt.txt', 'BACKGROUND.md', 'skill/SKILL.md',
+        'network-overview/package.json', 'network-overview/index.mjs', 'network-overview/client.js']
 UNITS = ('net-gateway-control-route.service net-gateway-agent.service net-gateway-ai-patrol.service '
          'net-gateway-patrol.timer dsh.service net-gateway.service net-gateway-maintain.service '
          'net-gateway-maintain.timer net-gateway-storage.service net-gateway-storage.timer '

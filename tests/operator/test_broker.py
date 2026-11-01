@@ -18,6 +18,12 @@ def healthy_result():
       'proxy_https':{'ok':True,'result':{'http_status':204,'expected_health_status':True}}}}
 
 class RecoveryTests(unittest.TestCase):
+    def test_integration_hold_keeps_pending_publications_without_restarting_a_skipped_service(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hold=Path(folder)/'hold';hold.touch()
+            with patch.object(broker,'SYNC_HOLD',hold,create=True),patch.object(broker,'command') as command:
+                self.assertFalse(broker.dispatch_source_sync_once());command.assert_not_called()
+
     def test_successful_local_publications_request_sync_but_tests_and_unverified_policy_do_not(self):
         for operation,result,expected in [
             ('program_publish',{'deployed':True},True),('tool_publish',{'deployed':True},True),
@@ -114,6 +120,12 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(broker.verification_healthy(result))
 
     def test_all_probes_healthy_is_accepted(self):self.assertTrue(broker.verification_healthy(healthy_result()))
+
+    def test_repair_persists_the_same_final_verdict_returned_to_its_caller(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)),patch.object(broker,'command'),patch.object(broker,'boot_id',return_value='boot'),patch.object(broker,'diagnose',return_value=healthy_result()):
+            returned=broker.repair('recheck_nodes')
+            stored=json.loads((Path(folder)/'last-repair.json').read_text())
+            self.assertTrue(returned['verified_healthy']);self.assertIs(stored.get('verified_healthy'),True)
 
     def test_failed_repair_remains_armed_and_cannot_extend_deadline(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(broker,'STATE',Path(folder)), patch.object(broker,'command'), patch.object(broker,'boot_id',return_value='boot'):

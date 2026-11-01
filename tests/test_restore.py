@@ -122,5 +122,27 @@ class RestoreTests(unittest.TestCase):
         restore.stage(self.repo,target,self.credentials)
         self.assertTrue((target/'var/lib/dsh/native-task-identity').is_dir())
 
+    def test_overview_package_and_read_adapter_roundtrip_without_runtime_records(self):
+        sources={
+            '/usr/local/lib/net-gateway-agent/overview.py':'# readonly overview adapter',
+            '/usr/local/share/net-gateway-agent/network-overview/package.json':'{"name":"home-network-overview"}',
+            '/usr/local/share/net-gateway-agent/network-overview/index.mjs':'export function apply() {}',
+            '/usr/local/share/net-gateway-agent/network-overview/client.js':'// native overview client',
+        }
+        for name,content in sources.items():self.fixture.put(name,content).chmod(0o640)
+        self.fixture.put('/usr/local/share/net-gateway-agent/network-overview/private-log.json','private runtime record')
+        files=backup.collect(self.fixture.root)
+        self.assertIn('src/operator/overview.py',files)
+        self.assertIn('src/dsh/network-overview/client.js',files)
+        self.assertNotIn('private runtime record','\n'.join(v.decode() for v in files.values()))
+        backup.write_snapshot(self.repo,files)
+        target=self.temp/'overview-roundtrip';restore.stage(self.repo,target,self.credentials)
+        for name,content in sources.items():
+            recovered=target/name.lstrip('/')
+            self.assertEqual(recovered.read_text(),content)
+            if name.startswith('/usr/local/share/'):
+                self.assertTrue(recovered.stat().st_mode&0o004,'public plugin code must be readable by replacement DSH user')
+        self.assertFalse((target/'var/lib/dsh/state/.env').stat().st_mode&0o007)
+
 
 if __name__ == '__main__': unittest.main()

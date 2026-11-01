@@ -104,7 +104,7 @@ export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
     name: 'gateway', description: '家庭网关专用诊断和可恢复修复。用户无需运行命令。遵循当前用户批准的网络策略；返回实际证据，失败不能宣称修复。',
     parameters: {
-      operation: { type: 'string', required: true, enum: ['status','diagnose','probe','quality','patrol_status','policy','recheck_nodes','refresh_subscription','restart_gateway','restore_gateway'], description: '操作。先诊断，quality查看节点/采样流量，patrol_status查看自主运维进度，policy读取用户当前策略。' },
+      operation: { type: 'string', required: true, enum: ['status','overview','diagnose','probe','quality','patrol_status','policy','recheck_nodes','refresh_subscription','restart_gateway','restore_gateway'], description: '操作。overview读取概览页相同的脱敏状态；诊断使用diagnose，quality查看节点/采样流量，patrol_status查看自主运维进度，policy读取用户当前策略。' },
       target: { type: 'string', description: '仅probe使用，如www.google.com；不传URL或凭据。' },
     },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
@@ -114,7 +114,7 @@ export function apply(ctx, config = {}) {
       if (args.target !== undefined) request.target = args.target;
       return JSON.stringify(await callBroker(request, exec.signal));
     },
-    presentCall(args) { const read = ['status','diagnose','probe','quality','patrol_status','policy'].includes(args.operation); return { card: 'generic', title: read ? '检查家庭网络' : '修复家庭网络', kind: read ? 'read' : 'write' }; },
+    presentCall(args) { const read = ['status','overview','diagnose','probe','quality','patrol_status','policy'].includes(args.operation); return { card: 'generic', title: read ? '检查家庭网络' : '修复家庭网络', kind: read ? 'read' : 'write' }; },
   }));
   for (const [name, prefix, description] of [
     ['gateway_skill', 'skill_', '维护自己的运维方法skill：读取版本、测试候选、验证发布。候选Markdown在工作区编辑，通过行为验收后版本化上线。'],

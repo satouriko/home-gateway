@@ -22,3 +22,14 @@ jobs:
       - run: npm ci --prefix runtime/dsh --ignore-scripts --no-audit --no-fund
       - run: python3 tools/apply_dsh_patches.py --runtime runtime/dsh
       - run: SDK_RUNTIME="$PWD/runtime/dsh/node_modules" node --test tests/dsh-execution/*.test.mjs
+  overview-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.14.1'
+      - run: npm ci --prefix tests/browser --ignore-scripts --no-audit --no-fund
+      - run: npx --prefix tests/browser playwright install --with-deps chromium webkit
+      - run: npm --prefix tests/browser run overview

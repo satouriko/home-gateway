@@ -4,9 +4,12 @@
   "type": "module",
   "scripts": {
     "check": "node mobile.mjs",
-    "inspection": "node inspection.mjs"
+    "inspection": "node inspection.mjs",
+    "overview": "node overview.mjs"
   },
   "devDependencies": {
-    "playwright": "1.64.1"
+    "playwright": "1.64.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   }
 }

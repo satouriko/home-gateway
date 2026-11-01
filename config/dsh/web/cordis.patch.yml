@@ -26,3 +26,7 @@
 - insert:
     - id: home-gateway-native-maintenance
       name: file:///usr/local/share/net-gateway-agent/native-maintenance.mjs
+
+- insert:
+    - id: home-network-overview
+      name: file:///usr/local/share/net-gateway-agent/network-overview/index.mjs

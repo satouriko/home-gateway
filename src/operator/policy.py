@@ -2,7 +2,7 @@
 import ipaddress
 import re
 
-READS = {'status', 'diagnose', 'probe', 'quality', 'patrol_status', 'policy', 'context','audit_plan','native_status','native_inspection'}
+READS = {'status', 'diagnose', 'probe', 'quality', 'patrol_status', 'policy', 'context','audit_plan','native_status','native_inspection','overview'}
 REPAIRS = {'recheck_nodes', 'refresh_subscription', 'restart_gateway', 'restore_gateway'}
 PROGRAMS = {'program_status','program_test','program_publish','tool_status','tool_test','tool_publish','tool_run','skill_status','skill_test','skill_publish'}
 POLICY = {'policy_test','policy_apply'}

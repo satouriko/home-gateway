@@ -10,7 +10,7 @@
     },
     "config/dsh/web/cordis.patch.yml": {
       "mode": 416,
-      "sha256": "15a5976df7b7ab52e8c58e8a81455aee65db6f7fc960bd0918e61dc71d9d42b7"
+      "sha256": "17ed7af6a39f425da797a750f8112e02969c0d5ed29c64163ed751fef3bf1539"
     },
     "config/dsh/web/package.json": {
       "mode": 416,
@@ -114,7 +114,7 @@
     },
     "docs/operator/BACKGROUND.md": {
       "mode": 420,
-      "sha256": "ec252e3e5e91750272382558a778fc462b02fa1a7af0e5cdd51f280ab6961cd4"
+      "sha256": "daac7bceeef516cdc5e5441af9dba40e3e2ae786741b787e2c1d6a080e419b94"
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
@@ -200,9 +200,21 @@
       "mode": 509,
       "sha256": "9f70c2ab64fa6e302e369afd0210cbf6a8c29e18917f4c03eceab039be756444"
     },
+    "src/dsh/network-overview/client.js": {
+      "mode": 416,
+      "sha256": "4a514f0e1a94b292cabbc080a0762fb1bdebffe87504aba8f5dbf28874ea6105"
+    },
+    "src/dsh/network-overview/index.mjs": {
+      "mode": 416,
+      "sha256": "08df88ff56f63ba3da04f7147b299c3768d1e0d3a277ac726834a68c164dae19"
+    },
+    "src/dsh/network-overview/package.json": {
+      "mode": 416,
+      "sha256": "e728961a3fe622676d6e08b0df38e1a829ccae35a3cd2341b5fbae6988d1684a"
+    },
     "src/dsh/operator.mjs": {
       "mode": 509,
-      "sha256": "066d8985f65afa193da3efa3b6150ca6adbb177aef6a8ac8e3787e082ebd9803"
+      "sha256": "f518e8195c6ad8ea016745d7dfbe33af5978a5a6e06359221a3f63ec208d68ea"
     },
     "src/dsh/skill/SKILL.md": {
       "mode": 420,
@@ -234,7 +246,7 @@
     },
     "src/operator/broker.py": {
       "mode": 420,
-      "sha256": "96539977f8a6d5780620f9fc6c5832125fa3bb2c00a1527a7a4681255de1c15e"
+      "sha256": "56b7ce1327ff98be7c9bb65532d84e31a27bbfb29490697470235f35c906c607"
     },
     "src/operator/control_route.py": {
       "mode": 493,
@@ -252,13 +264,17 @@
       "mode": 420,
       "sha256": "b1ab5f06a04fdeb84c3468ac07f13d22971a9315735e7451ce954ee507bbe9dc"
     },
+    "src/operator/overview.py": {
+      "mode": 420,
+      "sha256": "0a30e64e8c00206aafb34a06b5a011a93160134c427f56320c9abbaa48d1cff2"
+    },
     "src/operator/patrol.py": {
       "mode": 420,
       "sha256": "f271fb6d8696032e9b3550fc5a1b6c6074169269bd1d7d50d86e01201aebf78b"
     },
     "src/operator/policy.py": {
       "mode": 420,
-      "sha256": "851a0e5ae48b23bad4d2f32df7edfae23b14e8d7df9a52f18d4e60f18f7c916b"
+      "sha256": "bb9c4064cca67f97ba84e4eeaec1ad423e4fbf90a420524e32be968371ad1900"
     },
     "src/operator/pricing.py": {
       "mode": 493,

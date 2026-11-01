@@ -33,6 +33,7 @@ SKILL_LOCK = threading.Lock()
 REQUEST=threading.local()
 REGISTRY_LOCK=threading.Lock()
 SYNC_STATUS=Path('/var/lib/home-gateway-backup/status.json')
+SYNC_HOLD=Path('/run/home-gateway-integration')
 SYNC_REQUEST_LOCK=threading.Lock()
 SYNC_START_LOCK=threading.Lock()
 SYNC_EVENT=threading.Event()
@@ -48,6 +49,7 @@ def source_sync_pending(status_path=None):
     return not isinstance(status,dict) or status.get('acknowledged_request')!=request['id']
 
 def dispatch_source_sync_once():
+    if SYNC_HOLD.exists():return False
     try:command('systemctl','start','home-gateway-backup.service',timeout=165)
     except Exception:return False  # Leave the durable request for the independent retry timer.
     # A publication may arrive while an already-running push is finishing.
@@ -341,7 +343,7 @@ def repair(operation):
             raise RuntimeError('gateway inactive after repair')
         healthy=verification_healthy(result) and time.time()<deadline and json.loads(pending.read_text()).get('id')==ident
         if healthy:pending.unlink(missing_ok=True)
-        write_state(STATE/'last-repair.json',{'operation':operation,'completed_at':time.time(),'result':result})
+        write_state(STATE/'last-repair.json',{'operation':operation,'completed_at':time.time(),'verified_healthy':healthy,'result':result})
         return {'operation':operation,'verified_healthy':healthy,'rollback_armed':not healthy,'verification':result}
     except Exception:
         # Leave the independently supervised transaction armed for offline rollback.
@@ -351,6 +353,9 @@ def repair(operation):
 def dispatch(request):
     data=validate_request(request);op=data['operation']
     if op=='status':return status()
+    if op=='overview':
+        from overview import CACHE, build_snapshot
+        return CACHE.get(lambda:build_snapshot(api,STATE,CONFIG))
     if op.startswith('native_'):
         import native_jobs as native
         if op=='native_status':return native.status()
