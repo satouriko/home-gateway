@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -85,6 +86,66 @@ class NativeTests(unittest.TestCase):
         self.assertTrue(lease['admitted']);native.finish('session-test',lease['id'],'completed',self.now+1)
         self.state['checked_at']=self.now+25000
         self.assertFalse(native.admit('session-test',self.state,self.now+25000,occurrence='same')['admitted'])
+    def test_native_cadence_uses_scheduled_occurrence_despite_subsecond_start_jitter(self):
+        previous=datetime.fromisoformat('2026-11-01T07:22:28.371+00:00').timestamp()
+        actual=previous+0.5391741
+        self.now=previous+14400+0.153
+        self.state['checked_at']=self.now
+        occurrence='schedule-test:2026-11-01T11:22:28.371Z'
+        self.ledger['observed_task']={'kind':'every','everySeconds':14400}
+        self.ledger['runs']=[{'id':'previous','at':actual,'deadline':actual+540,'state':'completed',
+            'kind':'independent_audit','program_version':'v1','schedule_id':'schedule-test',
+            'occurrence':'schedule-test:2026-11-01T07:22:28.371Z'}]
+        self.write()
+        effective=native.effective_state(self.state,self.ledger)
+        self.assertEqual(effective['last_ai_at'],actual)
+        self.assertEqual(effective['last_routine_ai_at'],actual)
+        self.assertIn(actual,effective['routine_run_times'])
+        lease=native.admit('session-test',self.state,self.now,occurrence=occurrence)
+        self.assertTrue(lease['admitted']);self.assertEqual(lease['kind'],'independent_audit')
+        self.assertEqual(lease['at'],self.now);self.assertEqual(lease['deadline'],self.now+540)
+
+    def test_future_native_occurrence_cannot_buy_an_early_audit(self):
+        occurrence='schedule-test:'+datetime.fromtimestamp(self.now+0.001,timezone.utc).isoformat()
+        result=native.admit('session-test',self.state,self.now,occurrence=occurrence)
+        self.assertFalse(result['admitted']);self.assertEqual(native.read()['runs'],[])
+
+    def test_healthy_observations_without_due_audit_do_not_buy_a_model(self):
+        self.state['last_independent_audit_at']=self.now-14399
+        self.assertFalse(self.admit()['admitted']);self.assertEqual(native.read()['runs'],[])
+
+    def retry_fixture(self):
+        occurrence=datetime.fromtimestamp(self.now-10,timezone.utc).isoformat()
+        next_at=datetime.fromtimestamp(self.now+14390,timezone.utc).isoformat()
+        self.ledger.update(enabled=True,last_gate={'at':self.now-9,'reason':'no due audit or new improvement evidence','admitted':False},
+            observed_task={'id':'schedule-test','status':'active','kind':'every','everySeconds':14400,'scheduledAt':next_at,
+                'lastDelivery':{'kind':'execution','executionId':'skipped-id','scheduledAt':occurrence,'status':'skipped'}})
+        return occurrence
+
+    def test_status_exposes_due_skipped_native_receipt_without_admitting_or_mutating_it(self):
+        occurrence=self.retry_fixture();self.write()
+        (self.path.parent/'patrol.json').write_text(json.dumps(self.state))
+        before=self.path.read_bytes()
+        with patch.object(native.time,'time',return_value=self.now):result=native.status()
+        self.assertEqual(result['retry_execution'],{'session_id':'session-test','schedule_id':'schedule-test',
+            'execution_id':'skipped-id','occurrence_at':occurrence})
+        self.assertEqual(self.path.read_bytes(),before)
+
+    def test_retry_candidate_respects_due_budget_spacing_freshness_and_future_occurrences(self):
+        self.retry_fixture()
+        cases=[('checked_at',self.now-901),('last_routine_ai_at',self.now-7199),
+               ('last_independent_audit_at',self.now-14399),('routine_run_times',[self.now-15000]*6)]
+        for key,value in cases:
+            with self.subTest(key=key):
+                self.assertIsNone(native.retry_candidate({**self.state,key:value},self.ledger,self.now))
+        for key in ['routine_allowed','storage_available']:
+            with self.subTest(key=key),patch.object(native,key,return_value=False):
+                self.assertIsNone(native.retry_candidate(self.state,self.ledger,self.now))
+        for key,value in [('status','started'),('retry',{'at':'already-retried'}),('scheduledAt',datetime.fromtimestamp(self.now+1,timezone.utc).isoformat())]:
+            ledger=json.loads(json.dumps(self.ledger));ledger['observed_task']['lastDelivery'][key]=value
+            with self.subTest(receipt=key):self.assertIsNone(native.retry_candidate(self.state,ledger,self.now))
+        ledger=json.loads(json.dumps(self.ledger));ledger['observed_task']['scheduledAt']=datetime.fromtimestamp(self.now,timezone.utc).isoformat()
+        self.assertIsNone(native.retry_candidate(self.state,ledger,self.now))
     def test_last_recurring_occurrence_uses_live_task_even_when_restore_preference_is_disabled(self):
         self.ledger['observed_task']={'kind':'every','everySeconds':14400,'status':'inactive'};self.write()
         self.state['audit_plan']={'enabled':False}

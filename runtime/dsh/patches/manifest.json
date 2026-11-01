@@ -5,23 +5,23 @@
       "package": "@deepseek-ai/dsh-schedule",
       "version": "0.2.1-rc.5",
       "file": "schedule-execution.patch",
-      "sha256": "a6bc1a6e2c082086619407e4a66906fc676aac1e78930ebaf184fbd6b848ee07",
+      "sha256": "4a138ddd1292931461980ccf55d994f8b2d78d5365e7504d74fe4ff4bec670f4",
       "licenseSha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
       "changes": [
         {
           "path": "lib/index.js",
           "upstreamSha256": "022b9f191b6ca0f4b0f26625afc49f375933068a42712c0a75e94e439d7e6d0e",
-          "patchedSha256": "b83a7c0c38673c9d0f5a6a7c22029f873c725857a39516f86c68f08ee304f985"
+          "patchedSha256": "4630d8b2cad3e46c5111580e2644056c365cc7658b917041dd7dcffe9170a5de"
         },
         {
           "path": "lib/typert.host.js",
           "upstreamSha256": "d41bfc4d30142f90516e2d2e5338caed1ae75fccbd5e84d869f45f7cd4d2c129",
-          "patchedSha256": "ce15afaae419625aea5b1a4c44cac79fddadcbcb4d2d534758aa2b15cca015a7"
+          "patchedSha256": "1bca24364583cc4e766b0204318db0aeba8d181eeaf5634441e1c660e476372f"
         },
         {
           "path": "lib/typert.remote-client.js",
           "upstreamSha256": "7a492371d30b3b351d15f0e68d8cdddcb45ba8c7a31f124d356336639d843d81",
-          "patchedSha256": "401b2aeffa88b42da4572b2a5cd8692ee829b4b3fbd57b0425025b09b7b2468c"
+          "patchedSha256": "24d7cab6089b0ecc1c32d078f48549d2275b9cfeec304c8012aec6f359cde233"
         },
         {
           "path": "lib/types/delivery-history.js",
@@ -41,17 +41,17 @@
         {
           "path": "lib/types/execution.js",
           "upstreamSha256": null,
-          "patchedSha256": "fb578cb827a184ac3eb7a4b6b260754ea106ea6b0d576a43500e7cec28946039"
+          "patchedSha256": "b84be95ac4e55c03e8987144b48cda9874110074ba1df63b8f01c273def70ba7"
         },
         {
           "path": "lib/types/index.d.ts",
           "upstreamSha256": "1f683f0c7a80ae940ab535e212cb81582676568d159dc9b39ff2ccb60dfbe480",
-          "patchedSha256": "df615752d6da112992d99e7dde000f183e923073eb38ec0778cdb909e1a62a13"
+          "patchedSha256": "e1ff417cf0aec8347211897cede9d125bef2bac7ad20509d5bb25ef8c388f0b9"
         },
         {
           "path": "lib/types/index.js",
           "upstreamSha256": "7b3bcf3db9b95bf50140fd35517b16dbdbafcacfe34ac23d361993595e801d65",
-          "patchedSha256": "c5bf9e32757d7baf2d5236dce57a434cd2c2b074f51fa5a2c54125e01da955e0"
+          "patchedSha256": "a8827fc9b7d98add851928c66c7e005f49fcb06784605a12d585cab8424348cc"
         },
         {
           "path": "lib/types/runtime.d.ts",
@@ -61,7 +61,7 @@
         {
           "path": "lib/types/runtime.js",
           "upstreamSha256": "2c89807747ff8451fa588d6b93ae7c6480d84c07fdafc81364ad5204a3e419e3",
-          "patchedSha256": "f7e27ea6272e5613602aaa11a864773660d3c44ff7b8efdfec4534baee5d4115"
+          "patchedSha256": "bfd4212b41ae08b445ee653ff773f48413af35c3df9ddc18b0cafc4afa3cd80c"
         },
         {
           "path": "lib/types/storage.d.ts",
@@ -76,7 +76,7 @@
         {
           "path": "lib/types/types.d.ts",
           "upstreamSha256": "83d232cca3b8ca518e25e6a33a8ee75ff5dc24110afe7c194d4258760264ca57",
-          "patchedSha256": "8a4e417a565247fb99ad022630ee45f2e26ecf328812e8ef467b14391f608d43"
+          "patchedSha256": "d3c70700905834d0de0ef9933d716ebf456c5c378acda6f658dd3e5592ca069a"
         },
         {
           "path": "lib/types/update.js",

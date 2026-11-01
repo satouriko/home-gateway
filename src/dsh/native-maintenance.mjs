@@ -134,6 +134,14 @@ export function installNativeMaintenance(ctx,config,callBroker,loadIdentity=read
               status:job.state==='preempted'?'interrupted':job.state,summary:job.summary,executionSessionId:job.execution_session_id});
             if(result?.updated)completed.set(job.id,signature);
           }
+          // A corrected due gate can recover the latest rejected occurrence
+          // through native durable delivery, without moving the user's task.
+          const retry=(await request({operation:'native_status'})).retry_execution;
+          if(retry?.session_id===current.session_id&&retry.schedule_id===task.id&&
+             actual?.lastDelivery?.executionId===retry.execution_id&&actual.lastDelivery.scheduledAt===retry.occurrence_at){
+            const {sessionId,status,lastDelivery,...expected}=actual;
+            await scoped.schedule.retryExecution({sessionId:retry.session_id,id:retry.schedule_id,executionId:retry.execution_id,expected});
+          }
           return;
         }
         if(current.schedule_id&&!current.provision_requested){await request({operation:'native_observe',task:null});return;}

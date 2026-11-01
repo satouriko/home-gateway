@@ -12,6 +12,29 @@ import patrol
 from test_broker import healthy_result
 
 class DispatchTests(unittest.TestCase):
+    def test_real_node_pool_signal_reaches_emergency_dispatch_unless_program_repairs_it(self):
+        for recovered in [False,True]:
+            with self.subTest(recovered=recovered),tempfile.TemporaryDirectory() as folder:
+                calls=[];commands=[];broken=healthy_result();broken['node_observations']={'urgent':True,'fingerprint':'node-pool:fixture'}
+                def call(request):
+                    calls.append(request['operation'])
+                    if request['operation']=='diagnose':return copy.deepcopy(broken)
+                    if request['operation']=='traffic_status':return {'status':'insufficient_evidence','domains':[]}
+                    if request['operation']=='quality':return {}
+                    if request['operation']=='recheck_nodes':
+                        result=healthy_result() if recovered else copy.deepcopy(broken)
+                        if recovered:result['node_observations']={'urgent':False}
+                        return {'verified_healthy':recovered,'verification':result}
+                    raise AssertionError(request)
+                def command(args,**kwargs):
+                    commands.append(args);return SimpleNamespace(stdout='inactive' if args[1]=='is-active' else 'success',returncode=0)
+                context=Path(folder)/'context.json'
+                with patch.object(patrol,'STATE',Path(folder)),patch.object(patrol,'CONTEXT',context),patch.object(patrol,'call',side_effect=call),patch.object(patrol,'inspect_active',return_value={'active':True,'version':'v','result':{'action':'none','probe_domains':[]}}),patch.object(patrol.subprocess,'run',side_effect=command),patch.object(patrol,'save',side_effect=lambda p,v,group=None:p.write_text(json.dumps(v))),patch.object(patrol,'routine_allowed',return_value=True),redirect_stdout(io.StringIO()):
+                    patrol.main()
+                self.assertIn('recheck_nodes',calls)
+                started=any(c[1]=='start' for c in commands)
+                self.assertEqual(started,not recovered)
+                if not recovered:self.assertTrue(json.loads(context.read_text())['urgent'])
     def run_patrol(self,failure,recovered=False,job='inactive'):
         calls=[];commands=[];broken=healthy_result();broken['checks'][failure]={'ok':False,'error':'TimeoutError'}
         def call(request):

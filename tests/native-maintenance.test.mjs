@@ -32,7 +32,7 @@ function setupHarness(current,catalog){
  const effects=[],calls=[],hooks={};
  const workspace={id:'w',path:'/var/lib/dsh/workspace',attachSession:async id=>calls.push(['attach',id])};
  const controller={list:async()=>({items:[{sessionId:'past',cwd:workspace.path}]}),create:async args=>{assert.equal(args.workspaceId,'w');return{sessionId:'new'}},projections:async()=>({values:{workingDirectory:workspace.path}})};
- const scoped={schedule:{registerExecutor:(name,fn)=>{calls.push(['executor',name,fn]);return()=>{};},configureExecution:async args=>{const task=catalog.find(t=>t.id===args.id);task.execution=args.execution;return task;},completeExecution:async()=>({updated:true}),catalog:async()=>catalog,create:async(sid,args)=>{calls.push(['create',sid,args]);return{id:'new-task',...args}}},sessionController:controller,workspaceRegistry:{resolveByPath:async()=>workspace},get:()=>undefined,effect(fn){effects.push(fn());},on(){}};
+ const scoped={schedule:{registerExecutor:(name,fn)=>{calls.push(['executor',name,fn]);return()=>{};},configureExecution:async args=>{const task=catalog.find(t=>t.id===args.id);task.execution=args.execution;return task;},completeExecution:async()=>({updated:true}),retryExecution:async args=>{calls.push(['retry',args]);return{updated:true}},catalog:async()=>catalog,create:async(sid,args)=>{calls.push(['create',sid,args]);return{id:'new-task',...args}}},sessionController:controller,workspaceRegistry:{resolveByPath:async()=>workspace},get:()=>undefined,effect(fn){effects.push(fn());},on(){}};
  const ctx={on:(n,f)=>hooks[n]=f,inject(names,fn){if(names.includes('schedule'))fn(scoped);},logger:{warn(){}}};
  installNativeMaintenance(ctx,{},async req=>{calls.push(req);return{ok:true,result:req.operation==='native_status'?current:{}}});
  return{calls,controller,cleanup(){for(const f of effects.reverse())f?.();}};
@@ -49,6 +49,20 @@ test('fresh installation provisions one durable task; external worker reports jo
  assert.equal(h.calls.find(c=>c[0]==='create')[2].every_seconds,14400);
  await h.controller.projections({sessionId:'external'});assert(h.calls.some(c=>c[0]==='attach'&&c[1]==='external'));
  h.cleanup();
+});
+
+test('observation asks native scheduler to retry only the broker-eligible retained occurrence',async()=>{
+ const occurrence='2026-11-01T04:00:00.000Z';
+ const task={id,kind:'every',sessionId:'s',title:'User title',prompt:'User prompt',everySeconds:14400,status:'active',scheduledAt:'2026-11-01T08:00:00.000Z',
+  execution:{kind:'external',executor:'home-network'},lastDelivery:{kind:'execution',executionId:'missed',scheduledAt:occurrence,status:'skipped'}};
+ const eligible={session_id:'s',schedule_id:id,execution_id:'missed',occurrence_at:occurrence};
+ for(const retry of [undefined,eligible,{...eligible,execution_id:'stale'},{...eligible,schedule_id:'other'}]){
+  const original=structuredClone(task),h=setupHarness({session_id:'s',schedule_id:id,enabled:true,retry_execution:retry},[task]);
+  await new Promise(r=>setImmediate(r));
+  const {sessionId,status,lastDelivery,...expected}=original;
+  assert.deepEqual(h.calls.filter(c=>c[0]==='retry').map(c=>c[1]),retry===eligible?[{sessionId:'s',id,executionId:'missed',expected}]:[]);
+  assert.deepEqual(task,original);assert(!h.calls.some(c=>c.operation==='native_admit'));h.cleanup();
+ }
 });
 
 test('cold broker outage rejects owned custom prompts using protected persisted identity',async()=>{

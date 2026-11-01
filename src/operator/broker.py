@@ -233,6 +233,7 @@ def context():
     result['native_automation']=context_summary()
     result['source_control']=source_control_status()
     result['observations']=traffic_status()
+    result['node_health']=node_observations(result.get('policy',{}))
     result['probe_capabilities']={'operation':'probe_compare','paths':['direct','proxy'],'isolation':'disposable engine, separate UID route, concrete selected proxy; no household configuration changes','scope':'HTTPS root, not a logged-in client application','coding_sandbox':'capability-dropping bwrap; credentials, history and broker socket hidden'}
     changes=STATE/'deployment-events.json'
     if changes.exists():result['recent_system_changes']=json.loads(changes.read_text())[-6:]
@@ -308,7 +309,18 @@ def diagnose():
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures={name:pool.submit(wrapped,fn) for name,fn in tests.items()}
         for name,future in futures.items():results[name]=future.result()
-    return {'status':status(),'checks':results,'note':'HTTP 401/403/429 are application responses, not proof of DNS or TCP failure.'}
+    current=status()
+    return {'status':current,'checks':results,'node_observations':node_observations(current.get('policy',{})),
+            'note':'HTTP 401/403/429 are application responses, not proof of DNS or TCP failure.'}
+
+def node_observations(policy):
+    from node_health import summarize
+    path=Path('/var/lib/net-gateway/health-state.json')
+    try:
+        if path.stat().st_size>128*1024:raise ValueError('node history exceeds budget')
+        document=json.loads(path.read_text())
+    except (OSError,ValueError):document={}
+    return summarize(document,policy,time.time())
 
 def quality():
     providers=api('/providers/proxies')['providers']

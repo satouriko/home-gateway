@@ -16,5 +16,9 @@ schedule.registerExecutor('home-network',callback);
 schedule.create(sessionId,{title:'Atomic external task',prompt:'Inspect',every_seconds:60,execution:{kind:'external',executor:'home-network'}});
 schedule.configureExecution({sessionId,id,execution:{kind:'external',executor:'home-network'}});
 schedule.completeExecution({sessionId,id,executionId:'run',status:'completed',summary:'Done',executionSessionId:'fresh'});
+schedule.retryExecution({sessionId,id,executionId:'run',expected:record});
+// @ts-expect-error Host retry must compare the complete task observed before eligibility was calculated.
+schedule.retryExecution({sessionId,id,executionId:'run'});
+const retried: ScheduleDeliveryReceipt={...receipt,retry:{at:'2026-11-01T00:30:00.000Z',previousStatus:'skipped',previousDeliveredAt:receipt.deliveredAt}};
 schedule.history({sessionId,id,limit:10,beforeDeliveryId:'run'});
-void task; void fake;
+void task; void fake; void retried;

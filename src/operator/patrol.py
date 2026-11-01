@@ -26,6 +26,7 @@ def fault_keys(diagnosis):
     for issue in diagnosis.get('business_observations',{}).get('issues',[]):
         if issue.get('resolved') is False:faults.append('client_business:'+issue.get('domain','unknown'))
     direct=diagnosis.get('status',{}).get('policy',{}).get('mode')=='direct'
+    if not direct and diagnosis.get('node_observations',{}).get('urgent') is True:faults.append('proxy_node_pool')
     if diagnosis.get('status',{}).get('services',{}).get('net-gateway.service',{}).get('ActiveState')!='active':faults.append('gateway_service')
     if diagnosis.get('status',{}).get('storage',{}).get('critical'):faults.append('disk_space')
     for name,item in diagnosis.get('checks',{}).items():
@@ -39,6 +40,7 @@ def fault_signature(diagnosis):
     faults=fault_keys(diagnosis)
     evidence={name:{key:diagnosis.get('checks',{}).get(name,{}).get('result',{}).get(key) for key in ['rcode','http_status','expected_health_status']} for name in faults}
     for name in faults:evidence[name]['error']=diagnosis.get('checks',{}).get(name,{}).get('error')
+    if 'proxy_node_pool' in faults:evidence['proxy_node_pool']['incident']=diagnosis.get('node_observations',{}).get('fingerprint')
     return hashlib.sha256(json.dumps({'faults':faults,'evidence':evidence,'provider_counts':diagnosis.get('status',{}).get('provider_counts',{})},sort_keys=True).encode()).hexdigest()[:20]
 
 def urgent_ai_needed(state,diagnosis,now):
@@ -80,9 +82,17 @@ def repair_choice(diagnosis):
     faults=fault_keys(diagnosis)
     if 'gateway_service' in faults:return 'restore_gateway'
     if 'bootstrap_dns_api' in faults:return None
+    if 'proxy_node_pool' in faults:return 'recheck_nodes'
     if any(name in faults for name in ['gateway_dns_cn','gateway_dns_foreign']):return 'restore_gateway'
     if 'proxy_https' in faults and diagnosis.get('checks',{}).get('mainland_https',{}).get('ok'):return 'recheck_nodes'
     return None
+
+def maybe_request_node_review(state,nodes,reviewed):
+    fingerprint=nodes.get('fingerprint')
+    if not nodes.get('review_due') or not fingerprint or fingerprint in reviewed:return
+    current=state.get('review_request') or {}
+    if current.get('fingerprint') and current['fingerprint'] not in reviewed:return
+    state['review_request']={'fingerprint':fingerprint,'reason':'confirmed node-pool incident recovered; review bounded saved evidence at next permitted audit','node_incidents':nodes.get('incident_history',[])[-3:]}
 
 def call(request):
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
@@ -172,6 +182,8 @@ def main():
         state['review_request']={'fingerprint':'program-failed:'+str(program.get('failed_version')),'reason':'maintained diagnostic program failed and was rolled back'}
     if program.get('result',{}).get('review_request'):state['review_request']=program['result']['review_request']
     state.update(last_diagnosis=diagnosis)
+    observed_nodes=diagnosis.get('node_observations',{})
+    maybe_request_node_review(state,observed_nodes,native.effective_state(state,native.read()).get('reviewed',{}))
     for domain in program.get('result',{}).get('probe_domains',[])[:3]:
         try:
             result=call({'operation':'probe','target':domain});state.setdefault('tracked_probes',{})[domain]={**result,'observed_at':now}

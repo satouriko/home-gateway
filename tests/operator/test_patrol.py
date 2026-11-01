@@ -4,6 +4,26 @@ from patrol import should_run_ai, repair_choice, fault_signature, preempt_needed
 from test_broker import healthy_result
 
 class PatrolTests(unittest.TestCase):
+    def test_old_node_review_never_overwrites_a_new_program_failure(self):
+        import patrol
+        state={'review_request':{'fingerprint':'program-failed:new','reason':'worker failed'}}
+        nodes={'review_due':True,'fingerprint':'node-pool:old','incident_history':[]}
+        patrol.maybe_request_node_review(state,nodes,{'node-pool:old':100})
+        self.assertEqual(state['review_request']['fingerprint'],'program-failed:new')
+        patrol.maybe_request_node_review(state,{**nodes,'fingerprint':'node-pool:new'}, {})
+        self.assertEqual(state['review_request']['fingerprint'],'program-failed:new')
+        patrol.maybe_request_node_review(state,{**nodes,'fingerprint':'node-pool:new'},{'program-failed:new':100})
+        self.assertEqual(state['review_request']['fingerprint'],'node-pool:new')
+    def test_node_pool_incident_wakes_ai_even_when_coarse_https_probe_passes(self):
+        result=healthy_result();result['node_observations']={'urgent':True,'fingerprint':'node-pool:first'}
+        self.assertTrue(urgent_ai_needed({},result,1800000000))
+        self.assertEqual(repair_choice(result),'recheck_nodes')
+        first=fault_signature(result);state={'last_ai_fingerprint':first}
+        self.assertFalse(urgent_ai_needed(state,result,1800000010))
+        result['node_observations']['fingerprint']='node-pool:second'
+        self.assertTrue(urgent_ai_needed(state,result,1800000020))
+        result['node_observations']['urgent']=False
+        self.assertFalse(urgent_ai_needed(state,result,1800000030))
     def test_restored_disabled_task_cannot_fall_back_to_legacy_routine_ai(self):
         state={'audit_plan':{'enabled':False},'last_ai_at':0}
         with patch('patrol.routine_allowed',return_value=True):

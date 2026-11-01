@@ -4,10 +4,15 @@
 import datetime
 import json
 import os
+import sys
+import time
+import subprocess
 from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
+sys.path.insert(0,'/usr/local/lib/net-gateway-agent')
+import node_health
 
 
 def choose_region(probe, allow_other=True, direct_fallback=False):
@@ -22,6 +27,7 @@ def main():
     config = json.loads(Path("/etc/net-gateway/config.json").read_text())
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     base = "http://" + config["external-controller"]
+    attempts=[]
 
     def request(path, method="GET", data=None, timeout=35):
         query = urllib.request.Request(
@@ -42,9 +48,11 @@ def main():
                 "url": "https://www.gstatic.com/generate_204", "timeout": 5000, "expected": "204",
             })
             result = request("/proxies/" + region + "/delay?" + query, timeout=10)
-            return isinstance(result.get("delay"), (int, float))
+            ok=isinstance(result.get("delay"), (int, float))
         except (urllib.error.URLError, OSError, ValueError):
-            return False
+            ok=False
+        attempts.append({'region':region,'ok':ok})
+        return ok
 
     policy_path=Path('/var/lib/net-gateway-agent/approved-policy.json')
     approved=json.loads(policy_path.read_text()) if policy_path.exists() else {}
@@ -59,11 +67,19 @@ def main():
         "direct_fallback": preferences.get('allow_proxy_direct_fallback',False),
     }
     path = Path("/var/lib/net-gateway/health-state.json")
+    try:previous=json.loads(path.read_text()) if path.stat().st_size<=128*1024 else {}
+    except (OSError,ValueError):previous={}
+    now=time.time();summary.update(node_health.append(previous,node_health.event(now,region,attempts,approved),now))
     temporary = path.with_suffix(".tmp")
     with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as target:
         json.dump(summary, target)
+        target.flush();os.fsync(target.fileno())
     temporary.replace(path)
-    print(json.dumps(summary))
+    if node_health.summarize(summary,approved,now)['urgent']:
+        # Wake the cheap verifier immediately; it repairs/rechecks before a
+        # model call. The independent three-minute timer remains the fallback.
+        subprocess.run(['systemctl','start','--no-block','net-gateway-patrol.service'],capture_output=True,timeout=5)
+    print(json.dumps({k:summary[k] for k in ['checked_at','selected_region','status','direct_fallback']}))
     return 0 if region else 1
 
 

@@ -122,7 +122,7 @@
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
-      "sha256": "1ceabc105186bcfe53729416224e028dae2ce682dd305941703d66cce5d2538e"
+      "sha256": "ec2d25a443a5d56369afec3bb5fbf9d0a005612513553a78de7eb8404e44ab1e"
     },
     "preferences/audit-plan.json": {
       "mode": 384,
@@ -150,15 +150,15 @@
     },
     "runtime/dsh/patches/NOTICE.md": {
       "mode": 420,
-      "sha256": "f0f8b20cc7c2aac6477796a4d8f12ce51ae0068558ebccd4f6020d491388d773"
+      "sha256": "3a4a11d96487d92d640e41f016180f3647f353bff37890c10b5da0e727f7e99d"
     },
     "runtime/dsh/patches/manifest.json": {
       "mode": 420,
-      "sha256": "c11cb967cbb4615e96d9b7637a1af49a9c45bf07db89fcd91e055f12dac3a8a6"
+      "sha256": "075708e4584f7e4935311c5d4559fb6a73088f8a99b666928b993f1ce24a8716"
     },
     "runtime/dsh/patches/schedule-execution.patch": {
       "mode": 420,
-      "sha256": "a6bc1a6e2c082086619407e4a66906fc676aac1e78930ebaf184fbd6b848ee07"
+      "sha256": "4a138ddd1292931461980ccf55d994f8b2d78d5365e7504d74fe4ff4bec670f4"
     },
     "runtime/dsh/patches/schedule-history-ui.patch": {
       "mode": 420,
@@ -202,7 +202,7 @@
     },
     "src/dsh/native-maintenance.mjs": {
       "mode": 509,
-      "sha256": "9f70c2ab64fa6e302e369afd0210cbf6a8c29e18917f4c03eceab039be756444"
+      "sha256": "b189db7e835f200181c994332c22926e9d5d0cca217784de5b70fd0df31c656d"
     },
     "src/dsh/network-overview/client.js": {
       "mode": 416,
@@ -230,7 +230,7 @@
     },
     "src/gateway/gateway_maintain.py": {
       "mode": 493,
-      "sha256": "b316fdd8c4e78e7576193439785dfcdb83e395738d0d120e316ee339a8cb6e8b"
+      "sha256": "11892554a2666cbfd9bf76caee786a4cbb8b77776424f480d9f7c627683c2069"
     },
     "src/gateway/network_setup.py": {
       "mode": 493,
@@ -254,7 +254,7 @@
     },
     "src/operator/broker.py": {
       "mode": 420,
-      "sha256": "5a323fa56433716c72b85c500aa7588caa807faac23a4012976f65f18ca378a6"
+      "sha256": "77f0553f9339f762ffe157af31aff3dba70abdc287d19cc3d1f92bae05e4078d"
     },
     "src/operator/business_probe.py": {
       "mode": 420,
@@ -278,7 +278,11 @@
     },
     "src/operator/native_jobs.py": {
       "mode": 420,
-      "sha256": "b1ab5f06a04fdeb84c3468ac07f13d22971a9315735e7451ce954ee507bbe9dc"
+      "sha256": "0702bd6dc5b4e6b483e271b53c52a020f5c7d981e90cb061f595d319e43ab686"
+    },
+    "src/operator/node_health.py": {
+      "mode": 420,
+      "sha256": "d9e5ac15589f689b91668c8298db357964b4015f26280a544d7764c253a54e11"
     },
     "src/operator/overview.py": {
       "mode": 420,
@@ -286,7 +290,7 @@
     },
     "src/operator/patrol.py": {
       "mode": 420,
-      "sha256": "ea0e09f567e8b3f42810ecf1b1464862dd7fb53703b84731e746d8d421044272"
+      "sha256": "9c5266bb840e07adee9dd5f7393ead13db668d0f6cddf96dea336a1477e68b49"
     },
     "src/operator/policy.py": {
       "mode": 420,

@@ -26,3 +26,5 @@ upstream integration remains separate work.
 An unpatched old scheduler cannot read the new external-task records. Rollback
 requires stopping DSH and restoring both code and compatible pre-extension task
 data. Never restore an entire old session store over conversations created later.
+
+The host-only retry operation can requeue the latest skipped or failed external occurrence once. It requires a complete expected task record and preserves the execution ID, scheduled occurrence, original receipt and user cadence. Remote clients do not receive a retry mutation API.

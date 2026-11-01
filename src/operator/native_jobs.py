@@ -4,6 +4,7 @@ The scheduler may wake cheaply; only a fresh, due, off-peak audit buys a model
 call. Human chat and the independent emergency worker do not use this gate.
 """
 import contextlib
+from datetime import datetime
 import fcntl
 import json
 import os
@@ -59,6 +60,16 @@ def emergency_active():
     return result.stdout.strip() in ['active','activating']
 
 
+def occurrence_time(occurrence,schedule_id):
+    """Read the scheduler's occurrence clock, including pre-upgrade ledger rows."""
+    prefix=str(schedule_id)+':'
+    if not schedule_id or not isinstance(occurrence,str) or not occurrence.startswith(prefix):return None
+    try:
+        instant=datetime.fromisoformat(occurrence[len(prefix):].replace('Z','+00:00'))
+        return instant.timestamp() if instant.tzinfo is not None else None
+    except (ValueError,OverflowError):return None
+
+
 def effective_state(state,ledger):
     result={**state};runs=[r for r in ledger.get('runs',[]) if r.get('kind')!='deployment_validation']
     if not runs:return result
@@ -70,7 +81,10 @@ def effective_state(state,ledger):
     audits=[r for r in runs if r['kind']=='independent_audit']
     if audits:
         result['last_independent_audit_at']=max(state.get('last_independent_audit_at',0),audits[-1]['at'])
-        if audits[-1]['at']>=state.get('last_independent_audit_at',0):result['last_audited_program_version']=audits[-1].get('program_version')
+        if audits[-1]['at']>=state.get('last_independent_audit_at',0):
+            result['last_audited_program_version']=audits[-1].get('program_version')
+            scheduled=occurrence_time(audits[-1].get('occurrence'),audits[-1].get('schedule_id'))
+            result['last_independent_audit_due_at']=scheduled if scheduled is not None and scheduled<=audits[-1]['at'] else audits[-1]['at']
     version=state.get('diagnostic_program',{}).get('version')
     result['successful_audits']=state.get('successful_audits',0)+sum(r['state']=='completed' and r.get('program_version')==version for r in audits)
     result['reviewed']={**state.get('reviewed',{}),**{r['review_fingerprint']:r['at'] for r in runs if r.get('review_fingerprint')}}
@@ -84,37 +98,76 @@ def status():
     plan=json.loads(plan_path.read_text()) if plan_path.exists() else {}
     result['enabled']=ledger.get('enabled',plan.get('enabled',True))
     result['preferences']=plan
+    state_path=STATE/'patrol.json'
+    state=json.loads(state_path.read_text()) if state_path.exists() else {}
+    candidate=retry_candidate(state,ledger,time.time())
+    if candidate:result['retry_execution']=candidate
     return result
 
 
+def admission_state(state,ledger,now):
+    effective=effective_state(state,ledger)
+    # Only cadence follows the scheduled clock. Budgets and spacing retain the
+    # real admission timestamps; delayed native starts cannot shift every due.
+    effective['last_independent_audit_at']=effective.get('last_independent_audit_due_at',effective.get('last_independent_audit_at',0))
+    effective['audit_plan']={**effective.get('audit_plan',{}),'enabled':True}
+    interval=(ledger.get('observed_task') or {}).get('everySeconds')
+    if isinstance(interval,(int,float)):
+        effective['audit_plan']={**effective['audit_plan'],'interval_hours':interval/3600,'expires_at':now+60,'for_program_version':state.get('diagnostic_program',{}).get('version')}
+    if ledger.get('initial_review'):
+        effective['review_request']={'fingerprint':'native-integration-review','reason':'first native maintenance integration review'}
+    return effective
+
+
+def admission_reason(state,ledger,effective,now,occurrence):
+    from patrol import should_run_ai, urgent_ai_needed
+    scheduled=occurrence_time(occurrence,ledger.get('schedule_id'))
+    if ledger.get('enabled') is False:return 'automation task is disabled or deleted'
+    if scheduled is not None and scheduled>now:return 'scheduled occurrence is in the future'
+    if any(r['state']=='running' and r['deadline']>now for r in ledger.get('runs',[])):return 'audit already running'
+    if now-state.get('checked_at',0)>900:return 'waiting for fresh program observations'
+    if urgent_ai_needed(state,state.get('last_diagnosis',{}),now) or emergency_active():return 'emergency recovery takes priority'
+    if not routine_allowed(now):return 'waiting for off-peak budget'
+    if not storage_available():return 'storage reserve is protected'
+    if now-effective.get('last_routine_ai_at',0)<7200:return 'minimum audit spacing'
+    if not should_run_ai(effective,state.get('last_diagnosis',{}),now):return 'no due audit or new improvement evidence'
+    return None
+
+
+def retry_candidate(state,ledger,now):
+    """Read-only eligibility; the executor rechecks the same gate under its lease."""
+    gate=ledger.get('last_gate',{})
+    if gate.get('admitted') or gate.get('reason')!='no due audit or new improvement evidence':return None
+    task=ledger.get('observed_task') or {};receipt=task.get('lastDelivery') or {}
+    if task.get('id')!=ledger.get('schedule_id') or task.get('status')!='active':return None
+    if receipt.get('kind')!='execution' or receipt.get('status')!='skipped' or receipt.get('retry'):return None
+    occurrence=ledger['schedule_id']+':'+receipt.get('scheduledAt','')
+    scheduled=occurrence_time(occurrence,ledger['schedule_id'])
+    next_at=occurrence_time(ledger['schedule_id']+':'+task.get('scheduledAt',''),ledger['schedule_id'])
+    if scheduled is None or next_at is None or not scheduled<=now<next_at:return None
+    if gate.get('execution_id',receipt.get('executionId'))!=receipt.get('executionId'):return None
+    if gate.get('occurrence',occurrence)!=occurrence:return None
+    if occurrence in ledger.get('occurrences',[]) or any(r.get('id')==receipt.get('executionId') for r in ledger.get('runs',[])):return None
+    if admission_reason(state,ledger,admission_state(state,ledger,now),now,occurrence):return None
+    return {'session_id':ledger['session_id'],'schedule_id':ledger['schedule_id'],
+            'execution_id':receipt['executionId'],'occurrence_at':receipt['scheduledAt']}
+
+
 def admit(session_id,state,now=None,occurrence=None,execution_id=None):
-    from patrol import audit_due, fault_keys, fault_signature, should_run_ai, urgent_ai_needed
+    from patrol import audit_due, fault_keys, fault_signature
     now=time.time() if now is None else now
     with locked():
         ledger=read()
         if session_id in ledger.get('retired',[]):return {'managed':True,'admitted':False,'reason':'retired maintenance session'}
         if session_id!=ledger.get('session_id'):return {'managed':False,'admitted':False}
-        effective=effective_state(state,ledger)
-        effective['audit_plan']={**effective.get('audit_plan',{}),'enabled':True}
-        interval=(ledger.get('observed_task') or {}).get('everySeconds')
-        if isinstance(interval,(int,float)):
-            effective['audit_plan']={**effective['audit_plan'],'interval_hours':interval/3600,'expires_at':now+60,'for_program_version':state.get('diagnostic_program',{}).get('version')}
-        if ledger.get('initial_review'):
-            effective['review_request']={'fingerprint':'native-integration-review','reason':'first native maintenance integration review'}
-        reason=None
-        if ledger.get('enabled') is False:reason='automation task is disabled or deleted'
-        elif occurrence and occurrence in ledger.get('occurrences',[]):
+        effective=admission_state(state,ledger,now)
+        if occurrence and occurrence in ledger.get('occurrences',[]):
             existing=next((r for r in reversed(ledger.get('runs',[])) if r.get('occurrence')==occurrence),None)
             return {'managed':True,'admitted':False,'reason':'this occurrence was already handled','existing_job':existing}
-        elif any(r['state']=='running' and r['deadline']>now for r in ledger.get('runs',[])):reason='audit already running'
-        elif now-state.get('checked_at',0)>900:reason='waiting for fresh program observations'
-        elif urgent_ai_needed(state,state.get('last_diagnosis',{}),now) or emergency_active():reason='emergency recovery takes priority'
-        elif not routine_allowed(now):reason='waiting for off-peak budget'
-        elif not storage_available():reason='storage reserve is protected'
-        elif now-effective.get('last_routine_ai_at',0)<7200:reason='minimum audit spacing'
-        elif not should_run_ai(effective,state.get('last_diagnosis',{}),now):reason='no due audit or new improvement evidence'
+        reason=admission_reason(state,ledger,effective,now,occurrence)
         if reason:
-            ledger['last_gate']={'at':now,'session_id':session_id,'admitted':False,'reason':reason};save(ledger)
+            ledger['last_gate']={'at':now,'session_id':session_id,'admitted':False,'reason':reason,
+                                 'occurrence':occurrence,'execution_id':execution_id};save(ledger)
             return {'managed':True,'admitted':False,'reason':reason}
         clock=pricing_state(now);remaining=clock.get('off_peak_seconds_remaining',0)
         duration=min(540,remaining-60) if remaining else 540
