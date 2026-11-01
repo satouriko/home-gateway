@@ -1,12 +1,14 @@
 # 保守巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
 # 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康。
-# v4：修复“持续客户端端点”反复探测导致的升级循环。评估快照在探测之前生成，
-# 因此 checks 里没有 target:<domain>、也没有 tracked_probes；旧版靠 probe_failed
-# 判定外部端点永远是 False。缓存过期后程序又请求 probe，而不可解析/不可探测的
-# 端点会让 patrol 记录一次 target: 故障，故障指纹翻转，于是下一轮又紧急调用 AI。
-# 现在：固定路径健康且同一客户端故障在多轮历史中持续出现时，停止重复请求探测
-# （真实客户端的双路径证据仍由 business_watch 独立采集），并保留稳定指纹的
-# review_request，明确标注“未验证为用户业务恢复”，不把未解决说成已恢复。
+# v5：修正“偏好池全部 alive=false 就建议刷新订阅”的误动作。实测该标记会整体失真：
+# 2026-11-02 05:32-05:33 全部 12 个美国节点 alive=false（delay 0），而同一时段受保护
+# probe_compare 经该池节点代理成功（baidu 200、3/3 样本）、真实客户端也有代理流量。
+# 该分支只在固定国内+代理检查都通过时才会到达，此时“全部节点不可用”与实测矛盾，
+# 刷新订阅属于多余风险动作。改为仅记录“节点测速结果不可信、不作为动作依据”，
+# 仍保留真实的代理失败分支（recheck_nodes）与持续时延分支。
+# v4：修复“持续客户端端点”反复探测导致的升级循环（评估快照里没有 target: 检查，
+# 旧版靠 probe_failed 判定外部端点恒为假）。固定路径健康且同一客户端故障在多轮
+# 历史中持续出现时停止重复请求探测，保留稳定指纹的 review_request。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -103,16 +105,15 @@ def inspect(snapshot):
         action = 'recheck_nodes'
         probes = real_targets
         parts = parts + ['代理时延连续四次高于 1200ms 且此前基线低于 700ms，建议重新检测节点']
-    elif len(pool) >= 2 and len(dead) == len(pool):
-        action = 'refresh_subscription'
-        parts = parts + ['偏好地区节点全部不可用，建议刷新订阅']
     else:
         parts = parts + ['固定国内与代理健康检查通过；用户业务仍以独立观测为准']
+        if len(pool) >= 2 and len(dead) == len(pool):
+            parts = parts + ['节点测速把偏好池全部标为不可用，但固定代理检查通过，测速结果不可信，不据此刷新订阅或换节点']
 
     if dns_cn_bad or dns_foreign_bad:
         parts = parts + ['网关 DNS 检查异常，需先看解析层']
-    if 0 < len(dead) and len(dead) < len(pool):
-        parts = parts + ['偏好池有%d/%d个节点不可用' % (len(dead), len(pool))]
+    if 0 < len(dead) < len(pool):
+        parts = parts + ['偏好池有%d/%d个节点测速失败' % (len(dead), len(pool))]
     if streak >= 3:
         parts = parts + ['同一故障连续出现%d次' % streak]
     if sustained == 1:
