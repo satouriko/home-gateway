@@ -1,9 +1,10 @@
-# 保守的巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
-# 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康或带宽结论。
-# 注意：diagnose 快照不含 observations，target:* 检查在程序评估之后才写入，
-# 所以外部端点判定必须只依赖评估时确实存在的 business_observations/tracked_probes。
-# v2：客户端观测里“有连接尝试但上下行零字节、且从无成功流量”的端点，即使
-# business_checks 缓存已过期，也应按外部端点处理，避免每轮缓存过期后重复升级。
+# 保守巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
+# 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康。
+# v3：修复“外部零字节端点”判定的数据来源缺陷。评估快照不含 observations，
+# 旧逻辑永远取不到客户端字节，导致同一端点每轮重复 review_request。
+# 现在只依赖评估时确实存在的 history/tracked_probes/business_observations：
+# 固定路径健康、探测目标持续失败、且客户端同一故障在多轮历史中反复出现时，
+# 判定为端点级外部问题，保留记录但不再重复升级；新鲜故障仍立即升级。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -80,6 +81,10 @@ def inspect(snapshot):
     issues = business.get('issues', [])
     business_checks = business.get('checks', {})
     real_targets = [item.get('domain') for item in issues if item.get('domain')][:3]
+    stable_fixed_paths = (
+        proxy_present and mainland_present and not proxy_bad and not mainland_bad
+        and not service_bad and not dns_cn_bad and not dns_foreign_bad
+    )
 
     if not proxy_present or not mainland_present:
         parts = parts + ['检查数据缺失，不据此判断路径健康']
@@ -111,16 +116,11 @@ def inspect(snapshot):
     if sustained == 1:
         parts = parts + ['时延仅作路径证据，不代表吞吐上限']
 
-    observed_domains = snapshot.get('observations', {}).get('domains', [])
     tracked_probes = snapshot.get('tracked_probes', {})
     dial_only = []
     actionable = []
     for issue in issues:
         domain = issue.get('domain')
-        record = {}
-        for item in observed_domains:
-            if item.get('domain') == domain:
-                record = item
         tracked = checks.get('target:' + domain, {})
         if len(tracked) == 0:
             tracked = tracked_probes.get(domain, {})
@@ -133,19 +133,18 @@ def inspect(snapshot):
         direct_reach = direct.get('transport_ok') is True or (direct.get('passed_samples') or 0) >= 1
         proxy_reach = proxy_path.get('transport_ok') is True or (proxy_path.get('passed_samples') or 0) >= 1
         dual_fail = direct_fail and proxy_fail and not (direct_reach or proxy_reach)
-        # 客户端记录里有连接尝试但上下行始终零字节、且有失败样本：从未成功传输过业务数据。
-        # 不再要求 connections_seen 为 0（连接尝试会被计入），因此缓存过期后判定仍成立。
-        record_failures = record.get('failure_count') or 0
-        record_bytes = record.get('observed_bytes_lower_bound')
-        if record_bytes is None:
-            record_bytes = (record.get('observed_upload_bytes') or 0) + (record.get('observed_download_bytes') or 0)
-        never_transferred = (
-            len(record) > 0
-            and record_bytes == 0
-            and record_failures >= 1
-        )
+        recent_faults = 0
+        for entry in history[-12:]:
+            faults = entry.get('faults_after_confirmation')
+            if faults is None:
+                faults = entry.get('faults', [])
+            if 'client_business:' + domain in faults:
+                recent_faults = recent_faults + 1
         external = dual_fail
-        if not external and never_transferred and probe_failed:
+        persistent_external = (
+            stable_fixed_paths and probe_failed and recent_faults >= 8
+        )
+        if not external and persistent_external:
             external = True
         if external:
             dial_only = dial_only + [domain]
@@ -153,7 +152,7 @@ def inspect(snapshot):
             actionable = actionable + [domain]
 
     if len(dial_only) > 0:
-        parts = parts + ['直连与代理两条路径都无法建立连接，判定为外部端点不可达，已记录待观察，不再重复升级']
+        parts = parts + ['固定检查正常但同一客户端端点持续多轮失败且定向探测不可用，按外部端点问题保留记录，不再重复升级；未验证为用户业务恢复']
     targets = [item for item in real_targets if item not in dial_only]
 
     summary = parts[0] if len(parts) > 0 else '无检查数据'
