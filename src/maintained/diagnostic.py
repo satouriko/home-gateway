@@ -107,11 +107,43 @@ def inspect(snapshot):
     if sustained == 1:
         parts = parts + ['时延仅作路径证据，不代表吞吐上限']
 
+    observations = snapshot.get('observations', {})
+    observed_domains = observations.get('domains', [])
+    business_checks = business.get('checks', {})
+    dial_only = []
+    actionable = []
+    for issue in issues:
+        domain = issue.get('domain')
+        record = {}
+        for item in observed_domains:
+            if item.get('domain') == domain:
+                record = item
+        never_connected = (
+            record.get('connections_seen') == 0
+            and record.get('observed_bytes_lower_bound') == 0
+        )
+        paths = business_checks.get(domain, {}).get('result', {}).get('paths', {})
+        direct = paths.get('direct', {})
+        proxy_path = paths.get('proxy', {})
+        dual_fail = direct.get('transport_ok') is False and proxy_path.get('transport_ok') is False
+        tracked = checks.get('target:' + domain, {})
+        tracked_error = tracked.get('ok') is False
+        if len(record) > 0 and never_connected and (dual_fail or tracked_error):
+            dial_only = dial_only + [domain]
+        else:
+            actionable = actionable + [domain]
+
+    if len(dial_only) > 0:
+        parts = parts + ['客户端主机从未成功连接且直连与代理同样无法建立连接，属外部端点问题，已记录待观察']
+    targets = [item for item in real_targets if item not in dial_only]
+
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
         summary = summary + '；' + part
 
+    if len(issues) > 0 and len(actionable) == 0:
+        return {'summary': summary, 'action': action, 'probe_domains': targets}
     if len(issues) > 0:
         first = issues[0]
-        return {'summary': summary + '；实际客户端问题尚未解决', 'action': action, 'probe_domains': real_targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
+        return {'summary': summary + '；实际客户端问题尚未解决', 'action': action, 'probe_domains': targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
     return {'summary': summary, 'action': action, 'probe_domains': probes}
