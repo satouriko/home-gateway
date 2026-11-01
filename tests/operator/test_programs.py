@@ -3,6 +3,11 @@ from unittest.mock import patch
 from programs import validate_source, validate_output,evaluate
 
 class ProgramBoundaryTests(unittest.TestCase):
+    def test_publisher_rejects_health_only_program_that_misses_real_client_issue(self):
+        import programs
+        source="def inspect(s):\n return {'summary':'ok','action':'recheck_nodes' if s.get('checks',{}).get('proxy_https',{}).get('ok') is False else 'none','probe_domains':[]}"
+        with patch('programs.os.geteuid',return_value=1000):
+            with self.assertRaisesRegex(ValueError,'client'):programs.fixed_tests(source)
     def test_actual_isolated_python_process_runs_without_parent_import_paths(self):
         source="def inspect(snapshot):\n return {'summary':'real child','action':'none','probe_domains':[]}\n"
         with patch('programs.os.geteuid',return_value=1000):

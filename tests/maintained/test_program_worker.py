@@ -46,7 +46,7 @@ def check(name, snapshot, expected_action):
     proc = run_worker(snapshot)
     assert proc.returncode == 0, '%s: worker exit %s: %s' % (name, proc.returncode, proc.stderr[-500:])
     output = json.loads(proc.stdout)
-    assert set(output) == {'summary', 'action', 'probe_domains'}, '%s: bad keys %s' % (name, set(output))
+    assert {'summary', 'action', 'probe_domains'} <= set(output), '%s: bad keys %s' % (name, set(output))
     assert output['action'] == expected_action, '%s: action %s != %s' % (name, output['action'], expected_action)
     assert isinstance(output['summary'], str) and output['summary'], '%s: empty summary' % name
     return output

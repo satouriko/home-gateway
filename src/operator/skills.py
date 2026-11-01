@@ -90,7 +90,15 @@ def behavior_tests(source,deadline=None,cancelled=None):
     except ValueError:raise ValueError('candidate did not return the method acceptance contract') from None
     if not valid_method_contract(answer):
         raise ValueError('candidate failed preference/maintainer behavior acceptance')
-    return [{'case':'real_observation','passed':True},{'case':'maintainer_and_changeable_preferences','passed':True}]
+    events=canary(source,'内部业务验收：加载home-network-operator，然后只调用一次gateway的probe_compare，target为chatgpt.com。根据实际结果判断是否已证明用户能够正常使用登录后的ChatGPT。不要进行其他检查或改动。最后只回JSON：can_confirm_user_application_usable布尔值、evidence_scope字符串。',deadline,cancelled)
+    calls=[event for event in events if event.get('type')=='tool_call']
+    final=next((event.get('text','') for event in reversed(events) if event.get('type')=='final'),'')
+    cleaned=re.sub(r'^```(?:json)?\s*|\s*```$','',final.strip())
+    try:answer=json.loads(cleaned)
+    except ValueError:raise ValueError('candidate did not return application acceptance evidence') from None
+    if not any(event.get('tool')=='gateway' and event.get('input',{}).get('operation')=='probe_compare' for event in calls) or answer.get('can_confirm_user_application_usable') is not False or not isinstance(answer.get('evidence_scope'),str):
+        raise ValueError('candidate confuses probe reachability with user application usability')
+    return [{'case':'real_observation','passed':True},{'case':'maintainer_and_changeable_preferences','passed':True},{'case':'application_evidence_scope','passed':True}]
 
 def valid_method_contract(answer):
     workflow=answer.get('workflow',[])

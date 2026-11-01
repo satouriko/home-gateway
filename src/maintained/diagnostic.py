@@ -73,6 +73,9 @@ def inspect(snapshot):
     parts = []
     action = 'none'
     probes = []
+    business = snapshot.get('business_observations', {})
+    issues = business.get('issues', [])
+    real_targets = [item.get('domain') for item in issues if item.get('domain')][:3]
 
     if not proxy_present or not mainland_present:
         parts = parts + ['检查数据缺失，不据此判断路径健康']
@@ -80,20 +83,20 @@ def inspect(snapshot):
         parts = parts + ['网关服务未处于 active，交由外部恢复流程，不建议自行换节点']
     elif proxy_bad and not mainland_bad:
         action = 'recheck_nodes'
-        probes = probes + ['www.google.com']
+        probes = real_targets
         parts = parts + ['代理路径失败而国内直连正常，建议重新检测节点']
     elif proxy_bad and mainland_bad:
-        probes = probes + ['www.google.com']
+        probes = real_targets
         parts = parts + ['国内与代理同时失败，更像出口或解析层问题，不宜仅换节点']
     elif sustained == 1:
         action = 'recheck_nodes'
-        probes = probes + ['www.youtube.com']
+        probes = real_targets
         parts = parts + ['代理时延连续四次高于 1200ms 且此前基线低于 700ms，建议重新检测节点']
     elif len(pool) >= 2 and len(dead) == len(pool):
         action = 'refresh_subscription'
         parts = parts + ['偏好地区节点全部不可用，建议刷新订阅']
     else:
-        parts = parts + ['代理与国内路径均正常，无需操作']
+        parts = parts + ['固定国内与代理健康检查通过；用户业务仍以独立观测为准']
 
     if dns_cn_bad or dns_foreign_bad:
         parts = parts + ['网关 DNS 检查异常，需先看解析层']
@@ -108,4 +111,7 @@ def inspect(snapshot):
     for part in parts[1:]:
         summary = summary + '；' + part
 
+    if len(issues) > 0:
+        first = issues[0]
+        return {'summary': summary + '；实际客户端问题尚未解决', 'action': action, 'probe_domains': real_targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
     return {'summary': summary, 'action': action, 'probe_domains': probes}

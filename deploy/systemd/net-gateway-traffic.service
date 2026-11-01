@@ -1,0 +1,32 @@
+[Unit]
+Description=Bounded household connection and failure observations
+After=net-gateway.service
+Wants=net-gateway.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/lib/net-gateway-agent/traffic_collector.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+MemoryMax=96M
+CPUQuota=10%
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/net-gateway-agent
+InaccessiblePaths=-/var/lib/dsh-login -/var/lib/dsh/state/.env
+
+[Install]
+WantedBy=multi-user.target

@@ -8,3 +8,8 @@
 - id: credentials
   config:
     path: /var/lib/dsh-login/credentials.yaml
+
+- id: sandbox
+  config:
+    runnerCommand: ["/usr/bin/python3", "/usr/local/lib/net-gateway-agent/sandbox_runner.py"]
+    runnerFailureSignatures: ["gateway-sandbox:", "bwrap:", "setpriv:"]

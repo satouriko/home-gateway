@@ -14,13 +14,17 @@ import subprocess
 import tempfile
 import time
 from urllib.parse import urlsplit
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parent/'src/operator'))
+if Path('/usr/local/lib/net-gateway-agent').is_dir():sys.path.insert(0,'/usr/local/lib/net-gateway-agent')
+from source_sync import snapshot_versions
 
 CODE = ('user_policy.py patrol.py bounded.py policy.py extensions.py programs.py broker.py '
-        'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py overview.py').split()
+        'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py overview.py traffic.py traffic_collector.py business_probe.py business_watch.py probe_transport.py source_sync.py sandbox_runner.py').split()
 DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'native-maintenance.mjs', 'broker-client.mjs', 'maintenance-prompt.txt', 'BACKGROUND.md', 'skill/SKILL.md',
-        'network-overview/package.json', 'network-overview/index.mjs', 'network-overview/client.js']
+        'sync-notices.mjs', 'network-overview/package.json', 'network-overview/index.mjs', 'network-overview/client.js']
 UNITS = ('net-gateway-control-route.service net-gateway-agent.service net-gateway-ai-patrol.service '
-         'net-gateway-patrol.timer dsh.service net-gateway.service net-gateway-maintain.service '
+         'net-gateway-patrol.timer net-gateway-traffic.service dsh.service net-gateway.service net-gateway-maintain.service '
          'net-gateway-maintain.timer net-gateway-storage.service net-gateway-storage.timer '
          'net-gateway-watchdog.service net-gateway-watchdog.timer net-gateway-patrol.service '
          'dsh.service.d/storage.conf dsh.service.d/gateway-operator.conf '
@@ -272,7 +276,7 @@ def prepare_sync(repository):
     git(repository, 'merge', '--ff-only', remote)
 
 
-def sync_status(path, repository, error=None, request_id=None):
+def sync_status(path, repository, error=None, request_id=None, versions=None):
     if path is None: return
     previous = {}
     if path.exists():
@@ -280,7 +284,7 @@ def sync_status(path, repository, error=None, request_id=None):
         except ValueError: pass
     if not isinstance(previous, dict): previous = {}
     now = time.time()
-    status = {key: previous[key] for key in ['last_success_at', 'remote_commit', 'acknowledged_request'] if key in previous}
+    status = {key: previous[key] for key in ['last_success_at','remote_commit','acknowledged_request','acknowledged_versions','acknowledged_commit'] if key in previous}
     remote = git(repository, 'remote', 'get-url', 'origin').stdout.strip()
     match = re.fullmatch(r'(?:git@github\.com:|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?', remote)
     status.update(repository_url='https://github.com/' + match.group(1) if match else None,
@@ -288,10 +292,12 @@ def sync_status(path, repository, error=None, request_id=None):
                   result='failed' if error else 'success', last_attempt_at=now,
                   local_commit=git(repository, 'rev-parse', 'HEAD').stdout.strip(),
                   verification='last successful Git push',
+                  attempted_request=request_id,
                   error_code=str(error) if isinstance(error, SyncError) else type(error).__name__ if error else None)
     if error is None:
         status.update(last_success_at=now, remote_commit=status['local_commit'])
         if request_id is not None: status['acknowledged_request']=request_id
+        status.update(acknowledged_versions=versions or {},acknowledged_commit=status['local_commit'])
     temporary = path.with_suffix('.next')
     temporary.write_bytes(encoded(status)); temporary.chmod(0o600); temporary.replace(path)
 
@@ -316,6 +322,7 @@ def execute(args):
         # Push even with no new local change: the preceding push may have failed.
         git(args.repository, 'push', 'origin', 'HEAD:' + SYNC_BRANCH)
     print(json.dumps({'exported_files': len(files), 'pushed': args.push}))
+    return snapshot_versions(files)
 
 
 def main():
@@ -333,11 +340,11 @@ def main():
             request_id=request.get('id') if isinstance(request,dict) else None
             if not isinstance(request_id,str) or not re.fullmatch(r'[a-f0-9]{32}',request_id):
                 raise SyncError('invalid_publication_request')
-        execute(args)
+        versions=execute(args)
     except Exception as error:
-        if args.push: sync_status(args.status_file, args.repository, error)
+        if args.push: sync_status(args.status_file, args.repository, error,request_id=request_id)
         raise
-    if args.push: sync_status(args.status_file, args.repository, request_id=request_id)
+    if args.push: sync_status(args.status_file, args.repository, request_id=request_id,versions=versions)
 
 
 if __name__ == '__main__':

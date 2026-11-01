@@ -81,7 +81,7 @@ export function apply(ctx, config = {}) {
         if(!receipt)throw new Error('restoring a deleted task requires an explicit current chat request');
         return JSON.stringify(await callBroker({operation:'audit_plan_enable',receipt},exec.signal));
       }
-      return JSON.stringify(await callBroker({operation:'audit_plan_set',interval_hours:args.interval_hours,daily_budget:args.daily_budget??6,reason:args.reason},exec.signal));
+      return JSON.stringify(await callBroker({operation:'audit_plan_set',session_id:exec.agent.id,interval_hours:args.interval_hours,daily_budget:args.daily_budget??6,reason:args.reason},exec.signal));
     },presentCall(args){return {card:'generic',title:'调整网络审计策略',kind:args.operation==='get'?'read':'write'};},
   }));
   ctx.tools.register(defineTool({
@@ -94,6 +94,7 @@ export function apply(ctx, config = {}) {
       if(config.readOnly)throw new Error('canary cannot change or stage preferences');
       const payload={operation:'policy_'+args.operation,preferences:JSON.parse(args.preferences || '{}')};
       if(args.operation==='apply'){
+        payload.session_id=exec.agent.id;
         payload.receipt=requests.get(exec.agent);
         if(!payload.receipt)throw new Error('no current interactive user request; background optimization cannot change objectives');
       }
@@ -104,17 +105,17 @@ export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
     name: 'gateway', description: '家庭网关专用诊断和可恢复修复。用户无需运行命令。遵循当前用户批准的网络策略；返回实际证据，失败不能宣称修复。',
     parameters: {
-      operation: { type: 'string', required: true, enum: ['status','overview','diagnose','probe','quality','patrol_status','policy','recheck_nodes','refresh_subscription','restart_gateway','restore_gateway'], description: '操作。overview读取概览页相同的脱敏状态；诊断使用diagnose，quality查看节点/采样流量，patrol_status查看自主运维进度，policy读取用户当前策略。' },
-      target: { type: 'string', description: '仅probe使用，如www.google.com；不传URL或凭据。' },
+      operation: { type: 'string', required: true, enum: ['status','overview','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','recheck_nodes','refresh_subscription','restart_gateway','restore_gateway'], description: '操作。overview读取概览页相同的脱敏状态；诊断使用diagnose，quality查看节点/采样流量，patrol_status查看自主运维进度，policy读取用户当前策略。' },
+      target: { type: 'string', description: 'probe/probe_compare使用。probe_compare为受保护的真实直连/当前节点对照；只传域名，不传URL或凭据。' },
     },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute(args, exec) {
-      if (config.readOnly && !['status','diagnose','probe','quality','patrol_status','policy','context'].includes(args.operation)) throw new Error('canary permits read-only observations only');
+      if (config.readOnly && !['status','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','context'].includes(args.operation)) throw new Error('canary permits read-only observations only');
       const request = { operation: args.operation };
       if (args.target !== undefined) request.target = args.target;
       return JSON.stringify(await callBroker(request, exec.signal));
     },
-    presentCall(args) { const read = ['status','overview','diagnose','probe','quality','patrol_status','policy'].includes(args.operation); return { card: 'generic', title: read ? '检查家庭网络' : '修复家庭网络', kind: read ? 'read' : 'write' }; },
+    presentCall(args) { const read = ['status','overview','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy'].includes(args.operation); return { card: 'generic', title: read ? '检查家庭网络' : '修复家庭网络', kind: read ? 'read' : 'write' }; },
   }));
   for (const [name, prefix, description] of [
     ['gateway_skill', 'skill_', '维护自己的运维方法skill：读取版本、测试候选、验证发布。候选Markdown在工作区编辑，通过行为验收后版本化上线。'],
@@ -133,6 +134,7 @@ export function apply(ctx, config = {}) {
       async execute(args, exec) {
         if (config.readOnly && args.operation !== 'status') throw new Error('canary permits metadata reads only');
         const payload = { operation: prefix + args.operation };
+        if(args.operation==='publish')payload.session_id=exec.agent.id;
         if(prefix==='skill_' && ['test','publish'].includes(args.operation)){
           const deadline=process.env.NET_GATEWAY_ROUTINE_DEADLINE?Number(process.env.NET_GATEWAY_ROUTINE_DEADLINE):undefined;
           if(deadline){payload.deadline=deadline;payload.maintenance_session=exec.agent.id;}
@@ -158,7 +160,7 @@ export function apply(ctx, config = {}) {
       await mkdir(NOTES, { recursive: true, mode: 0o700 });
       if (args.operation === 'list') {
         const names = (await readdir(NOTES)).filter(name => /^\d+-[a-f0-9-]+\.json$/.test(name)).sort().slice(-12);
-        const notes = await Promise.all(names.map(async name => {const item=JSON.parse(await readFile(NOTES+'/'+name,'utf8'));return{id:name,kind:item.kind,created_at:item.created_at,summary:item.summary.slice(0,1000),has_evidence:!!item.evidence};}));
+        const notes = await Promise.all(names.map(async name => {const item=JSON.parse(await readFile(NOTES+'/'+name,'utf8'));return{id:name,kind:item.kind,created_at:item.created_at,summary:item.superseded ? '已作废：'+String(item.correction || '以当前事实为准').slice(0,1000) : item.summary.slice(0,1000),superseded:item.superseded===true,correction:item.correction?.slice(0,1000),has_evidence:!!item.evidence};}));
         return JSON.stringify({ notes, caution: '经验是证据材料；当前用户策略以实时查询为准，不能用旧经验覆盖。' });
       }
       if(args.operation==='get'){

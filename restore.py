@@ -139,7 +139,7 @@ def download(url, destination):
 
 def install_runtime(repository, manifest):
     command('apt-get', 'update')
-    command('apt-get', 'install', '-y', 'ca-certificates', 'python3', 'python3-yaml', 'iproute2', 'nftables', 'iw', 'zstd', 'git', 'openssh-client', 'xz-utils')
+    command('apt-get', 'install', '-y', 'ca-certificates', 'python3', 'python3-yaml', 'bubblewrap', 'util-linux', 'iproute2', 'nftables', 'iw', 'zstd', 'git', 'openssh-client', 'xz-utils')
     version = manifest['runtime']['node']
     current = command('node', '--version').stdout.decode().strip() if shutil.which('node') else ''
     if current != 'v' + version:
@@ -214,7 +214,8 @@ def apply(repository, credentials):
     if Path('/etc/net-gateway/config.json').exists() or Path('/var/lib/dsh/state').exists():
         raise ValueError('apply requires a clean replacement system; existing deployment is protected')
     for args in [('groupadd', '--system', 'gateway-operators'), ('useradd', '--system', '--user-group', '--home-dir', '/var/lib/dsh', '--shell', '/usr/sbin/nologin', 'dsh'),
-                 ('useradd', '--system', '--gid', 'gateway-operators', '--home-dir', '/var/empty', '--shell', '/usr/sbin/nologin', 'gateway-worker')]:
+                 ('useradd', '--system', '--gid', 'gateway-operators', '--home-dir', '/var/empty', '--shell', '/usr/sbin/nologin', 'gateway-worker'),
+                 ('useradd', '--system', '--gid', 'gateway-operators', '--home-dir', '/var/empty', '--shell', '/usr/sbin/nologin', 'gateway-probe')]:
         try:
             subprocess.run(['getent', 'group' if args[0] == 'groupadd' else 'passwd', args[-1]], check=True, capture_output=True)
         except subprocess.CalledProcessError: command(*args)
@@ -260,7 +261,7 @@ def start():
     if 'memory' not in Path('/sys/fs/cgroup/cgroup.controllers').read_text(): raise ValueError('reboot to enable memory control before starting')
     command('env', 'SAFE_PATHS=/etc/net-gateway', '/usr/local/bin/mihomo', '-t', '-d', '/var/lib/net-gateway', '-f', '/etc/net-gateway/config.json')
     command('systemctl', 'enable', '--now', 'net-gateway-control-route.service', 'net-gateway-agent.service', 'net-gateway.service', 'dsh.service',
-            'net-gateway-maintain.timer', 'net-gateway-watchdog.timer', 'net-gateway-storage.timer', 'net-gateway-patrol.timer')
+            'net-gateway-traffic.service', 'net-gateway-maintain.timer', 'net-gateway-watchdog.timer', 'net-gateway-storage.timer', 'net-gateway-patrol.timer')
     result = json.loads(command('/usr/local/bin/gateway-agent', 'diagnose').stdout)
     print(json.dumps({'diagnose_ok': result.get('ok'), 'verification': result.get('result', {}).get('checks')}, ensure_ascii=False))
 

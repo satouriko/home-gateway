@@ -2,7 +2,7 @@
   "files": {
     "config/dsh/headless/cordis.patch.yml": {
       "mode": 416,
-      "sha256": "4b6aab0efcb2ffe3cc6f903e962f9176fc606acaae3cf617a876afcb8cd69f3d"
+      "sha256": "1ce4123a6bfebd7910f09a94bb0ed4c9d3ddde8ebd102773dd62c34b9e6c9444"
     },
     "config/dsh/headless/package.json": {
       "mode": 416,
@@ -10,7 +10,7 @@
     },
     "config/dsh/web/cordis.patch.yml": {
       "mode": 416,
-      "sha256": "17ed7af6a39f425da797a750f8112e02969c0d5ed29c64163ed751fef3bf1539"
+      "sha256": "78e261ba2df9901cf96218de55e1456601847ba92a6a45dab622e1f0e8c22635"
     },
     "config/dsh/web/package.json": {
       "mode": 416,
@@ -96,6 +96,10 @@
       "mode": 420,
       "sha256": "f3658117e16ad783db79f63e2b200a532d3458fcbba6676c41f7ca862f7eb31e"
     },
+    "deploy/systemd/net-gateway-traffic.service": {
+      "mode": 420,
+      "sha256": "eeea826d90a5674c27cd6742d43d9f728c6f614f06b78ba5409a2dc2e0e9a360"
+    },
     "deploy/systemd/net-gateway-watchdog.service": {
       "mode": 420,
       "sha256": "f4052ab31800df081257a7797c9c4d11e268b15caead08e894d0927270a84e33"
@@ -118,7 +122,7 @@
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
-      "sha256": "16c4ae9320567f7d1d548dbfbf24442e352c0f4b1f03be0e09a9202d619e47bb"
+      "sha256": "1ceabc105186bcfe53729416224e028dae2ce682dd305941703d66cce5d2538e"
     },
     "preferences/audit-plan.json": {
       "mode": 384,
@@ -166,11 +170,11 @@
     },
     "snapshot/published/diagnostic-active.json": {
       "mode": 384,
-      "sha256": "b0e1f9b5360934d9edcfdd49d0bd47a03fe9f6fc4e86f8cdd7a754d1ba101f95"
+      "sha256": "a379b07b3189cc2423bc5ca5268bfee13c49365c27098cf93d71be5e26f43e1f"
     },
     "snapshot/published/tool-active.json": {
       "mode": 384,
-      "sha256": "a1c73dcf7ea1e6e2af1e4fd43386f8425238fd9868c04b81499e30d634f4db09"
+      "sha256": "09b0ba92c74c441b859eedc981c5c9fd6290e5e3486f3cbc795427bb4debbc2a"
     },
     "src/dsh/AGENTS.md": {
       "mode": 416,
@@ -182,7 +186,7 @@
     },
     "src/dsh/identity.txt": {
       "mode": 420,
-      "sha256": "1747848d4fb1d83ecc7005eb296f40224bf81a9cf295c69c843506199abf07de"
+      "sha256": "83e818df72700205b1af05bcf1e12bc45e9e6d0ded011fce07ebb6de34c79143"
     },
     "src/dsh/lan-auto-login.mjs": {
       "mode": 416,
@@ -214,11 +218,15 @@
     },
     "src/dsh/operator.mjs": {
       "mode": 509,
-      "sha256": "f518e8195c6ad8ea016745d7dfbe33af5978a5a6e06359221a3f63ec208d68ea"
+      "sha256": "a57764761ccfeef7bc765d0df5db313b0ae9c7f71ae14ef68077479fb888f1c7"
     },
     "src/dsh/skill/SKILL.md": {
       "mode": 420,
-      "sha256": "09aec9a03953eeccabd2759f61ce7f40d4ca1128cae0532c31e3206eb3f33f1c"
+      "sha256": "3fe99b15b6b5a57d1f4f91e1a37e70e36a44364f4934755ac6fe5f10ebc85de5"
+    },
+    "src/dsh/sync-notices.mjs": {
+      "mode": 420,
+      "sha256": "26c582e6fbb4ab18fd0d2f09e458a3abf6558c048eef381973deea61b556f4f2"
     },
     "src/gateway/gateway_maintain.py": {
       "mode": 493,
@@ -230,11 +238,11 @@
     },
     "src/maintained/diagnostic.py": {
       "mode": 384,
-      "sha256": "156afea5703f12c5cd0c3197e108b20f3ab589da308ffe3bb2a53c4ce6bcfbb7"
+      "sha256": "56dadde7e9fa61e0580cb78400dd3879f8b45ec745788069bd660cf988f9cfcb"
     },
     "src/maintained/tool.py": {
       "mode": 384,
-      "sha256": "7ab42fe70bdd6420c9bc851da3211a8646e50623435efc897a594214335fbf9c"
+      "sha256": "4e0219fea895928eb40106b4e36dfcd0faa37ca89309e9f5a8a3024e41f18773"
     },
     "src/operator/ai_job.py": {
       "mode": 420,
@@ -246,19 +254,27 @@
     },
     "src/operator/broker.py": {
       "mode": 420,
-      "sha256": "56b7ce1327ff98be7c9bb65532d84e31a27bbfb29490697470235f35c906c607"
+      "sha256": "5a323fa56433716c72b85c500aa7588caa807faac23a4012976f65f18ca378a6"
+    },
+    "src/operator/business_probe.py": {
+      "mode": 420,
+      "sha256": "19aa11837d5f3188adbd5f85236c9ce1b759c2c00861002dbe6a5a7b85782ceb"
+    },
+    "src/operator/business_watch.py": {
+      "mode": 420,
+      "sha256": "2962ee485e02db05ec20d6ac8290e5f139657b38c6caa02e949886f3fec719d9"
     },
     "src/operator/control_route.py": {
       "mode": 493,
-      "sha256": "5881fec968d5df3e81caccab54847681127558c65d063b0ed5730296b4b90805"
+      "sha256": "c93c58daa0300a0713326d6bc63360edaab1ce00639ad46adee43181edbbac3a"
     },
     "src/operator/credential_guard.mjs": {
       "mode": 493,
       "sha256": "6b9ecd40fdfd727d2dd61b9e48e0d994b224e896b8757e9ed6a45890c3fe8ca3"
     },
     "src/operator/extensions.py": {
-      "mode": 493,
-      "sha256": "b5e00d5057f7ddb9b891f2883f6435ca8a81b3ed6275e8f352e84b5a9b806562"
+      "mode": 420,
+      "sha256": "71111b63038acc6cfcc9738aa009a6ac81894d5f2cb0cd55dfc9af2ea31333cd"
     },
     "src/operator/native_jobs.py": {
       "mode": 420,
@@ -270,27 +286,47 @@
     },
     "src/operator/patrol.py": {
       "mode": 420,
-      "sha256": "f271fb6d8696032e9b3550fc5a1b6c6074169269bd1d7d50d86e01201aebf78b"
+      "sha256": "ea0e09f567e8b3f42810ecf1b1464862dd7fb53703b84731e746d8d421044272"
     },
     "src/operator/policy.py": {
       "mode": 420,
-      "sha256": "bb9c4064cca67f97ba84e4eeaec1ad423e4fbf90a420524e32be968371ad1900"
+      "sha256": "713d7c764688a31247dae89057267b55fbc2e7bbdc8802a854719014ede63dd0"
     },
     "src/operator/pricing.py": {
       "mode": 493,
       "sha256": "4c9f7ae9035e0cfbda77aa76eab5cecc75f00ad913c9bf79b9dd81655216c15a"
     },
+    "src/operator/probe_transport.py": {
+      "mode": 420,
+      "sha256": "9c37d2e3f8843885bf84de5461247f5f703f8598711c75ad2ff799311dfb9216"
+    },
     "src/operator/programs.py": {
       "mode": 493,
-      "sha256": "8056d43a9d9f5c4d1edb25b038581ce1488e709a3017a0420c4b71900284b8a1"
+      "sha256": "df26dc1a87e91ecd922b4ed2bcdc344a39df469bc9fcf1f35c879240602477fa"
+    },
+    "src/operator/sandbox_runner.py": {
+      "mode": 420,
+      "sha256": "e19b5becd3c03fca6de2cf2b76a9abbbd5f5f6b2da0c404bccbb7a605020e461"
     },
     "src/operator/skills.py": {
       "mode": 493,
-      "sha256": "c4eac73d47ae23eb44c6b35174fa7c14624a82fb4b638c2bc83ad89f3e0ac755"
+      "sha256": "632297b0688ba971e7af681b5272e35c05886c1b5729876c523b26795e9db251"
+    },
+    "src/operator/source_sync.py": {
+      "mode": 420,
+      "sha256": "64a38267975e836b2f113f9ea6834598b09b09f98b7dc026403a8b5b204bfe94"
     },
     "src/operator/storage.py": {
       "mode": 493,
       "sha256": "d8931241d34ea7be7888d79e42ee53b4396535e0774f58627cb9c0879a498029"
+    },
+    "src/operator/traffic.py": {
+      "mode": 420,
+      "sha256": "6e0b7f683ffa1e2f15bde1d1e955204ebd653bf3009642eecc2c1b62f6e08685"
+    },
+    "src/operator/traffic_collector.py": {
+      "mode": 420,
+      "sha256": "7fe3465bf166e6f85a68cac5dd572b2d680efc04ccd852ef30029c8090fcb4b3"
     },
     "src/operator/user_policy.py": {
       "mode": 493,
@@ -298,7 +334,7 @@
     },
     "tests/maintained/test_program_worker.py": {
       "mode": 384,
-      "sha256": "ac181ddb99fc02d85b6667f2b0f9f398c4647425a880713f2f93da2deb9c6180"
+      "sha256": "2cd4f1809fda572ab2f3744cc962a3146b2aaf0a8e886798be985d9cd9e92faf"
     }
   },
   "format": 1,

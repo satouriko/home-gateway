@@ -2,17 +2,18 @@
 import ipaddress
 import re
 
-READS = {'status', 'diagnose', 'probe', 'quality', 'patrol_status', 'policy', 'context','audit_plan','native_status','native_inspection','overview'}
+READS = {'status','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','context','audit_plan','native_status','native_inspection','overview','source_sync_notices'}
 REPAIRS = {'recheck_nodes', 'refresh_subscription', 'restart_gateway', 'restore_gateway'}
 PROGRAMS = {'program_status','program_test','program_publish','tool_status','tool_test','tool_publish','tool_run','skill_status','skill_test','skill_publish'}
 POLICY = {'policy_test','policy_apply'}
-AUX={'maintenance_register','audit_plan_set','native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable'}
+AUX={'maintenance_register','audit_plan_set','native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable','source_sync_notice_ack'}
 
 def validate_request(request):
     if not isinstance(request, dict) or request.get('operation') not in READS | REPAIRS | PROGRAMS | POLICY | AUX:
         raise ValueError('unknown operation')
     operation = request['operation']
-    allowed = {'operation','preferences','receipt'} if operation in POLICY else ({'operation', 'target'} if operation == 'probe' else ({'operation','source'} if operation in ['program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish'] else ({'operation','request'} if operation=='tool_run' else {'operation'})))
+    allowed = {'operation','preferences','receipt'} if operation in POLICY else ({'operation', 'target'} if operation in ['probe','probe_compare'] else ({'operation','source'} if operation in ['program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish'] else ({'operation','request'} if operation=='tool_run' else {'operation'})))
+    if operation=='source_sync_notice_ack':allowed={'operation','request_id','revision','session_id','message_id'}
     if operation=='maintenance_register':allowed={'operation','session_id','kind'}
     if operation=='audit_plan_set':allowed={'operation','interval_hours','daily_budget','reason'}
     if operation=='audit_plan_enable':allowed={'operation','receipt'}
@@ -24,9 +25,21 @@ def validate_request(request):
         if operation=='native_admit':allowed.update(['occurrence','task_prompt','execution_id'])
         if operation=='native_observe':allowed={'operation','task'}
     if operation in ['skill_test','skill_publish']:allowed.update(['deadline','maintenance_session'])
+    if operation in ['program_publish','tool_publish','skill_publish','policy_apply','audit_plan_set','audit_plan_enable']:allowed.add('session_id')
     if set(request) - allowed:
         raise ValueError('unexpected fields')
     result = {'operation': operation}
+    if operation=='source_sync_notice_ack':
+        from source_sync import valid_session
+        if not valid_session(request.get('session_id')) or not re.fullmatch(r'[a-f0-9]{32}',str(request.get('request_id',''))) or type(request.get('revision')) is not int or request['revision']<1:
+            raise ValueError('valid publication receipt identity required')
+        expected=f"gateway-source-sync-{request['request_id']}-{request['revision']}"
+        if request.get('message_id')!=expected:raise ValueError('valid receipt message identity required')
+        return {key:request[key] for key in allowed}
+    if operation in ['program_publish','tool_publish','skill_publish','policy_apply','audit_plan_set','audit_plan_enable'] and request.get('session_id'):
+        from source_sync import valid_session
+        if not valid_session(request['session_id']):raise ValueError('valid originating session required')
+        result['session_id']=request['session_id']
     if operation=='audit_plan_enable':result['receipt']=request.get('receipt')
     if operation=='native_observe':
         task=request.get('task')
@@ -83,7 +96,7 @@ def validate_request(request):
         payload=request.get('request',{})
         if not isinstance(payload,dict):raise ValueError('request must be an object')
         result['request']=payload
-    if operation == 'probe':
+    if operation in ['probe','probe_compare']:
         target = request.get('target')
         if not isinstance(target, str) or len(target) > 253:
             raise ValueError('target must be a DNS hostname')

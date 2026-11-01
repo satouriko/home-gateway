@@ -35,3 +35,5 @@ DSH 依赖位于 `runtime/dsh/package-lock.json`。上游完整安装目录不�
 ## 网络概览插件
 
 `src/dsh/network-overview` 是独立的本地双侧插件。宿主从已登记的文件模块及最近 package.json 发现 `dsh.client` 声明，浏览器模块通过公开的 main/sidebar.panellist 插槽挂载；共享既有 React，不安装额外生产依赖，也不增加上游补丁。宿主在既有 Web 端口注册受 LAN 访问校验保护的只读接口，数据适配位于 `src/operator/overview.py`。插件程序与 profile 注册进入有限恢复快照，运行数据不进入公开备份。
+
+网络观测、受保护双路径探测、编程沙箱启动器和同步回执均由本项目模块及原生插件组合实现；未新增 DSH SDK 源码补丁。原生通知通过会话维护锁或持久化写租约追加 notice，上游升级需运行真实 SDK 持久化测试。

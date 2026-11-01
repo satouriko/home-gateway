@@ -23,6 +23,8 @@ def preempt_needed(state,diagnosis,job,context):
 
 def fault_keys(diagnosis):
     faults=[]
+    for issue in diagnosis.get('business_observations',{}).get('issues',[]):
+        if issue.get('resolved') is False:faults.append('client_business:'+issue.get('domain','unknown'))
     direct=diagnosis.get('status',{}).get('policy',{}).get('mode')=='direct'
     if diagnosis.get('status',{}).get('services',{}).get('net-gateway.service',{}).get('ActiveState')!='active':faults.append('gateway_service')
     if diagnosis.get('status',{}).get('storage',{}).get('critical'):faults.append('disk_space')
@@ -97,9 +99,27 @@ def save(path,data,group=None):
         json.dump(data,target,ensure_ascii=False);target.flush();os.fsync(target.fileno())
     temp.replace(path)
 
+def bound_observations(state,now):
+    cutoff=now-72*3600
+    probes=state.get('tracked_probes',{})
+    state['tracked_probes']=dict(sorted(((name,value) for name,value in probes.items() if isinstance(value,dict) and cutoff<=value.get('observed_at',0)<=now),key=lambda item:item[1]['observed_at'],reverse=True)[:24])
+    rollup=state.get('audit_rollup',{});seen=rollup.get('fault_last_seen',{})
+    retained=dict(sorted(((name,at) for name,at in seen.items() if isinstance(at,(int,float)) and cutoff<=at<=now),key=lambda item:item[1],reverse=True)[:64])
+    rollup['fault_last_seen']=retained;rollup['fault_counts']={name:value for name,value in rollup.get('fault_counts',{}).items() if name in retained}
+    checks=state.get('business_observations',{}).get('checks',{})
+    if state.get('business_observations') is not None:state['business_observations']['checks']={name:value for name,value in checks.items() if isinstance(value,dict) and cutoff<=value.get('at',0)<=now}
+    return state
+
 def main():
     path=STATE/'patrol.json';state=json.loads(path.read_text()) if path.exists() else {}
-    now=time.time();diagnosis=call({'operation':'diagnose'});faults=fault_keys(diagnosis)
+    now=time.time();bound_observations(state,now);diagnosis=call({'operation':'diagnose'})
+    try:
+        from business_watch import scan
+        observed=call({'operation':'traffic_status'})
+        business=scan(observed,state.get('business_observations',{}),lambda domain:call({'operation':'probe_compare','target':domain}),now)
+        state['business_observations']=business;diagnosis['business_observations']=business
+    except Exception:pass  # Missing observation is a coverage gap, not fictitious health.
+    faults=fault_keys(diagnosis)
     history=state.get('history',[])
     history.append({'at':now,'faults':faults,'proxy_ms':diagnosis.get('checks',{}).get('proxy_https',{}).get('result',{}).get('elapsed_ms')})
     history=history[-96:]
@@ -112,7 +132,9 @@ def main():
     state.setdefault('last_independent_audit_at',state.get('last_ai_at') or now)
     state.setdefault('last_audited_program_version',program.get('version'))
     rollup=state.setdefault('audit_rollup',{'samples':0,'fault_counts':{}});rollup['samples']+=1
-    for name in faults:rollup['fault_counts'][name]=rollup['fault_counts'].get(name,0)+1
+    for name in faults:
+        rollup['fault_counts'][name]=rollup['fault_counts'].get(name,0)+1
+        rollup.setdefault('fault_last_seen',{})[name]=now
     tickets=state.get('tickets',{})
     if faults:
         key='|'.join(faults)
@@ -133,7 +155,7 @@ def main():
         except Exception as error:state['last_auto_repair']={'operation':action,'error':str(error)}
         verification=state['last_auto_repair'].get('verification')
         if verification:
-            before=faults;diagnosis=verification;faults=fault_keys(diagnosis)
+            before=faults;diagnosis={**verification,'business_observations':state.get('business_observations',{})};faults=fault_keys(diagnosis)
             history[-1].update(faults_before_repair=before,faults=faults)
             if not faults:
                 key='|'.join(before)
@@ -144,7 +166,7 @@ def main():
                 state['review_request']={'fingerprint':'recurrence:'+'|'.join(before)+':'+str(int(now//86400)),'reason':'same local repair recurred at least three times within a day'}
     elif faults:
         # A transient failed probe should not buy a model call.
-        confirmation=call({'operation':'diagnose'});diagnosis=confirmation;faults=fault_keys(diagnosis)
+        confirmation=call({'operation':'diagnose'});diagnosis={**confirmation,'business_observations':state.get('business_observations',{})};faults=fault_keys(diagnosis)
         history[-1]['faults_after_confirmation']=faults
     if program.get('rolled_back'):
         state['review_request']={'fingerprint':'program-failed:'+str(program.get('failed_version')),'reason':'maintained diagnostic program failed and was rolled back'}
@@ -152,10 +174,10 @@ def main():
     state.update(last_diagnosis=diagnosis)
     for domain in program.get('result',{}).get('probe_domains',[])[:3]:
         try:
-            result=call({'operation':'probe','target':domain});state.setdefault('tracked_probes',{})[domain]=result
+            result=call({'operation':'probe','target':domain});state.setdefault('tracked_probes',{})[domain]={**result,'observed_at':now}
             diagnosis['checks']['target:'+domain]={'ok':True,'result':result}
         except Exception as error:
-            result={'error':type(error).__name__};state.setdefault('tracked_probes',{})[domain]=result
+            result={'error':type(error).__name__,'observed_at':now};state.setdefault('tracked_probes',{})[domain]=result
             diagnosis['checks']['target:'+domain]={'ok':False,**result}
     faults=fault_keys(diagnosis)
     quality=None
@@ -183,6 +205,7 @@ def main():
         if faults and job in ['active','activating'] and fault_signature(diagnosis)!=state.get('last_ai_fingerprint'):
             running_context.update(urgent=True,observed_at=now,diagnosis=diagnosis,maintenance_trigger='additional_fault')
             save(CONTEXT,running_context,'gateway-operators')
+        bound_observations(state,now)
         window=[value for value in state.get('ai_run_times',[]) if now-value<86400]
         # Native Automation owns routine AI. Emergency reasoning retains its
         # independent process so a blocked/broken Web UI cannot prevent recovery.

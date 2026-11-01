@@ -30,3 +30,12 @@
 - insert:
     - id: home-network-overview
       name: file:///usr/local/share/net-gateway-agent/network-overview/index.mjs
+
+- id: sandbox
+  config:
+    runnerCommand: ["/usr/bin/python3", "/usr/local/lib/net-gateway-agent/sandbox_runner.py"]
+    runnerFailureSignatures: ["gateway-sandbox:", "bwrap:", "setpriv:"]
+
+- insert:
+    - id: home-gateway-source-sync-notices
+      name: file:///usr/local/share/net-gateway-agent/sync-notices.mjs

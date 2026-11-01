@@ -82,6 +82,11 @@ def fixed_tests(source):
         result=evaluate(source,snapshot)
         if result['action']!=expected:raise ValueError('protected test failed: '+name)
         results.append({'case':name,'passed':True})
+    client=json.loads(json.dumps(healthy));client['business_observations']={'issues':[{'kind':'recurring_client_failure','domain':'real.example.com','fingerprint':'fixture-client-failure','resolved':False}]}
+    observed=evaluate(source,client)
+    if not observed.get('review_request') or 'real.example.com' not in observed['probe_domains']:
+        raise ValueError('protected client failure test requires unresolved review and real target')
+    results.append({'case':'recurring_client_failure','passed':True})
     return results
 
 def write_json(path,data):

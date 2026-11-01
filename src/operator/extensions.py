@@ -30,13 +30,13 @@ def execute(source,request):
     properties=['NoNewPrivileges=yes','ProtectSystem=strict','ProtectHome=yes','PrivateDevices=yes',
         'TemporaryFileSystem=/tmp:rw,size=32M','WorkingDirectory=/tmp',
         'InaccessiblePaths=/var/lib/dsh /etc/net-gateway /var/lib/net-gateway',
-        'CapabilityBoundingSet=','MemoryMax=128M','TasksMax=16','CPUQuota=50%','RuntimeMaxSec=12s','LimitFSIZE=8M']
+        'CapabilityBoundingSet=','MemoryMax=128M','TasksMax=16','CPUQuota=50%','RuntimeMaxSec=100s','LimitFSIZE=8M']
     args=['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect','--service-type=exec',
         '--unit='+unit,'--uid=gateway-worker','--gid=gateway-operators',
         *['--property='+value for value in properties],'/usr/bin/python3','-I',str(Path(__file__).resolve()),'--worker']
     try:
         result=bounded_run(args,input=json.dumps({'source':source,'request':request}),
-            timeout=17,env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','HOME':'/var/empty'})
+            timeout=105,env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','HOME':'/var/empty'})
         if result.returncode:
             detail=re.sub(r'sk-[A-Za-z0-9-]+','[redacted]',result.stderr[-1800:])
             raise ValueError('tool failed in isolated worker: '+detail)
@@ -71,8 +71,21 @@ def action(operation,source=None,request=None):
     if result.get('ok') is not True or not isinstance(result.get('capabilities'),dict):raise ValueError('self_test must return ok=true and capabilities')
     inspect=execute(source,{'operation':'inspect'})
     if not isinstance(inspect.get('observations'),list):raise ValueError('inspect must return an observations list')
+    cases=result.get('acceptance_cases')
+    if not isinstance(cases,list) or not 1<=len(cases)<=6:raise ValueError('declare bounded acceptance_cases for exported operations')
+    operations=set();acceptance=[]
+    for case in cases:
+        if not isinstance(case,dict) or set(case)!={'request','expect'} or not isinstance(case['request'],dict) or not isinstance(case['expect'],dict) or not case['expect']:
+            raise ValueError('acceptance case requires request and expected result fields')
+        case_operation=case['request'].get('operation')
+        if not isinstance(case_operation,str) or case_operation in ['self_test','acceptance']:raise ValueError('acceptance must execute the actual exported operation')
+        if len(json.dumps(case))>4096:raise ValueError('acceptance case exceeds budget')
+        observed=execute(source,case['request'])
+        if any(observed.get(key)!=value for key,value in case['expect'].items()):raise ValueError('operation acceptance failed: '+case_operation)
+        operations.add(case_operation);acceptance.append({'case':'live_operation:'+case_operation,'passed':True})
+    if set(result['capabilities'])-{'self_test'}-operations:raise ValueError('every exported capability needs live acceptance')
     record={'version':hashlib.sha256(source.encode()).hexdigest()[:16],'source':source,'capabilities':result['capabilities'],
-        'tests':[{'case':'isolated_self_test','passed':True},{'case':'live_inspect','passed':True}], 'published_at':time.time()}
+        'tests':[{'case':'isolated_self_test','passed':True},{'case':'live_inspect','passed':True},*acceptance], 'published_at':time.time()}
     if operation=='tool_test':return {key:value for key,value in record.items() if key!='source'}
     if active.exists():write_json(previous,json.loads(active.read_text()))
     write_json(active,record)
@@ -83,7 +96,7 @@ if __name__=='__main__' and '--worker' in sys.argv:
     if os.geteuid() in [0,pwd.getpwnam('dsh').pw_uid]:raise RuntimeError('tool must use the separate worker identity')
     resource.setrlimit(resource.RLIMIT_AS,(128*1024*1024,128*1024*1024))
     resource.setrlimit(resource.RLIMIT_CPU,(2,2));resource.setrlimit(resource.RLIMIT_FSIZE,(8*1024*1024,8*1024*1024))
-    signal.alarm(10)
+    signal.alarm(90)
     data=sys.stdin.read(65537)
     if len(data)>65536:raise ValueError('input budget exceeded')
     payload=json.loads(data);validate_source(payload['source'])

@@ -66,11 +66,33 @@ def start_sync_dispatcher():
         SYNC_THREAD=threading.Thread(target=worker,name='published-source-sync',daemon=True)
         SYNC_THREAD.start()
 
-def queue_source_sync(reason):
+def publication_registry():
+    from source_sync import SourceSyncRegistry
+    return SourceSyncRegistry(STATE/'publication-receipts.json')
+
+def publication_version(reason):
+    from source_sync import snapshot_versions
+    files={}
+    for name,source in [('diagnostic','program_publish'),('tool','tool_publish')]:
+        path=STATE/(name+'-active.json')
+        if path.exists():files['src/maintained/'+('diagnostic.py' if name=='diagnostic' else 'tool.py')]=json.loads(path.read_text()).get('source','').encode()
+    skill=Path('/usr/local/share/net-gateway-agent/skill/SKILL.md')
+    if skill.exists():files['src/dsh/skill/SKILL.md']=skill.read_bytes()
+    def encoded(value):return (json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()
+    approved=STATE/'approved-policy.json'
+    if approved.exists():files['preferences/network-policy.json']=encoded(json.loads(approved.read_text()))
+    plan=STATE/'audit-plan.json'
+    if plan.exists():
+        value=json.loads(plan.read_text());files['preferences/audit-plan.json']=encoded({k:value[k] for k in ['interval_hours','daily_budget','enabled','schedule'] if k in value})
+    return snapshot_versions(files).get(reason)
+
+def queue_source_sync(reason,session_id=None):
     with SYNC_REQUEST_LOCK:
-        write_state(STATE/'source-sync-request.json',{'id':uuid.uuid4().hex,'reason':reason,'requested_at':time.time()})
+        receipt=publication_registry().register(reason,session_id,publication_version(reason))
+        write_state(STATE/'source-sync-request.json',{'id':receipt['id'],'reason':reason,'requested_at':receipt['requested_at']})
     start_sync_dispatcher();SYNC_EVENT.set()
-    return {'requested':True,'pending':True}
+    return {'requested':True,'pending':True,'request_id':receipt['id'],'version':receipt['version'],
+            'phase':'held' if SYNC_HOLD.exists() else 'pending','notification':'durable automatic receipt in originating chat' if session_id else 'background receipt'}
 
 def acquire_transaction():
     if not LOCK.acquire(blocking=False):raise ValueError('another configuration operation is running')
@@ -182,7 +204,13 @@ def source_control_status(path=None):
         if not isinstance(value,dict):return {'available':False}
         keys=['repository_url','branch','expected_branch','result','last_attempt_at','last_success_at',
               'local_commit','remote_commit','verification','error_code','acknowledged_request']
-        return {'available':True,'pending':source_sync_pending(path),**{key:value[key] for key in keys if key in value}}
+        pending=source_sync_pending(path)
+        result={'available':True,'pending':pending,**{key:value[key] for key in keys if key in value}}
+        result['phase']='held' if pending and SYNC_HOLD.exists() else 'pending' if pending else value.get('result','unknown')
+        if (STATE/'publication-receipts.json').exists():
+            registry=publication_registry();registry.reconcile(value,SYNC_HOLD.exists())
+            result['recent_publications']=registry.records()[-6:]
+        return result
     except (OSError,ValueError):return {'available':False,'pending':source_sync_pending(path)}
 
 def context():
@@ -204,6 +232,8 @@ def context():
     from native_jobs import context_summary
     result['native_automation']=context_summary()
     result['source_control']=source_control_status()
+    result['observations']=traffic_status()
+    result['probe_capabilities']={'operation':'probe_compare','paths':['direct','proxy'],'isolation':'disposable engine, separate UID route, concrete selected proxy; no household configuration changes','scope':'HTTPS root, not a logged-in client application','coding_sandbox':'capability-dropping bwrap; credentials, history and broker socket hidden'}
     changes=STATE/'deployment-events.json'
     if changes.exists():result['recent_system_changes']=json.loads(changes.read_text())[-6:]
     path=Path('/run/net-gateway-agent/patrol-context.json')
@@ -246,15 +276,22 @@ def dns_probe(server, name):
 def https_probe(domain, health=False):
     url='https://www.gstatic.com/generate_204' if health else 'https://'+domain+'/'
     proxy='http://192.168.2.4:7890'
-    opener=urllib.request.build_opener(urllib.request.ProxyHandler({'http':proxy,'https':proxy}))
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):return None
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({'http':proxy,'https':proxy}),NoRedirect())
     start=time.monotonic()
     try:
         with opener.open(url,timeout=8) as response:
-            response.read(128);code=response.status
-    except urllib.error.HTTPError as error:code=error.code
+            body=response.read(32768);code=response.status;content_type=response.headers.get('Content-Type','')
+    except urllib.error.HTTPError as error:code=error.code;body=b'';content_type=''
+    from probe_transport import response_evidence
+    evidence=response_evidence(domain,code,body,content_type,round((time.monotonic()-start)*1000))
+    expected=(code==204) if health else evidence['content_ok']
     return {'domain':domain,'http_status':code,'elapsed_ms':round((time.monotonic()-start)*1000),
         'network_reachable':True,'business_rejection':code in [401,403,429],
-        'expected_health_status':not health or code==204,'routing':'Mihomo own rules; no forced DIRECT fallback'}
+        'business_ok':expected,'application_state':'healthy' if expected is True else 'rejected' if code>=400 else 'unverified',
+        'acceptance_scope':'fixed health endpoint' if health else evidence['acceptance_scope'],
+        'expected_health_status':expected,'origin':'synthetic_probe','routing':'Mihomo own rules; no forced DIRECT fallback'}
 
 def diagnose():
     tests={
@@ -283,8 +320,21 @@ def quality():
         if not host:continue
         entry=domains.setdefault(host,{'connections':0,'upload':0,'download':0})
         entry['connections']+=1;entry['upload']+=connection.get('upload',0);entry['download']+=connection.get('download',0)
-    return {'node_pools':pools,'active_domains':dict(sorted(domains.items(),key=lambda item:item[1]['download'],reverse=True)[:20]),
+    return {'node_pools':pools,'active_domains':dict(sorted(domains.items(),key=lambda item:item[1]['download'],reverse=True)[:20]),'client_observations':traffic_status(),
         'sampling':'active-connection snapshot, not complete traffic accounting','node_test':'native provider health URL; not proof every application works'}
+
+def traffic_status():
+    from traffic import summary
+    path=STATE/'traffic.json';now=time.time()
+    try:
+        if path.stat().st_size>2*1024**2:raise ValueError('traffic state exceeds budget')
+        state=json.loads(path.read_text());result=summary(state,now)
+        collector=state.get('collector',{});last=collector.get('last_success_at',0)
+        result['collector']={**collector,'fresh':isinstance(last,(int,float)) and 0<=now-last<300}
+        if not result['collector']['fresh']:result['status']='observation_stale'
+        return result
+    except (OSError,ValueError,TypeError,KeyError):
+        return {'status':'observation_unavailable','origin':'mihomo_client_observations','domains':[],'issues':[],'coverage':{'complete':False,'gaps':['collector unavailable; no inference about client activity']}}
 
 def restore_gateway():
     source,policy_source,rules_source=known_good()
@@ -351,6 +401,20 @@ def repair(operation):
     finally:release_transaction(transaction)
 
 def dispatch(request):
+    if request.get('operation')=='source_sync_notices':
+        validate_request(request)
+        source_control_status()
+        return publication_registry().notices()
+    if request.get('operation')=='source_sync_notice_ack':
+        data=validate_request(request)
+        return publication_registry().acknowledge(data['request_id'],data['revision'],data['session_id'],data['message_id'])
+    if request.get('operation')=='traffic_status':
+        validate_request(request)
+        return traffic_status()
+    if request.get('operation')=='probe_compare':
+        data=validate_request(request)
+        from probe_transport import compare
+        return compare(data['target'],api,CONFIG)
     data=validate_request(request);op=data['operation']
     if op=='status':return status()
     if op=='overview':
@@ -426,7 +490,7 @@ def handle(request):
     published=(op in ['program_publish','tool_publish','skill_publish'] and result.get('deployed') is True)
     published=published or op in ['audit_plan_set','audit_plan_enable'] or (op=='native_observe' and result.get('preference_changed')) or (op=='policy_apply' and result.get('verified_healthy') is True and result.get('rollback_armed') is False)
     if published:
-        try:sync=queue_source_sync(op)
+        try:sync=queue_source_sync(op,request.get('session_id'))
         except Exception:sync={'requested':False,'retry':'independent timer'}
         result={**result,'source_control_sync':sync}
     return result
