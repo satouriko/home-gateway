@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
       [data-network-overview] .nvo-event p {margin:0;overflow-wrap:anywhere;}
       [data-network-overview] .nvo-device {display:flex;justify-content:center;flex-wrap:wrap;gap:6px 14px;color:var(--nvo-muted);font-size:12px;padding:3px 0;}
       [data-network-overview] .nvo-alert {padding:12px 16px;border-radius:12px;background:var(--nvo-warn-bg);color:var(--nvo-warn);font-size:13px;}
+      [data-network-overview] .nvo-loading {padding:32px 18px;text-align:center;color:var(--nvo-muted);}
       @media(max-width:360px){[data-network-overview] .nvo-body{padding:14px 12px 20px;}[data-network-overview] .nvo-card{padding:17px 16px;}[data-network-overview] .nvo-node-name{font-size:24px;}[data-network-overview] .nvo-checks{gap:9px 13px;}}
     `;
     const valid = value => typeof value === 'number' && Number.isFinite(value);
@@ -52,7 +53,7 @@ window.__ModuleLoader__.load({
       const sameDay = value.toLocaleDateString('en-CA',options) === today.toLocaleDateString('en-CA',options);
       return value.toLocaleString('zh-CN',{...options,...(sameDay?{}:{month:'numeric',day:'numeric'}),hour:'2-digit',minute:'2-digit',hour12:false});
     };
-    const stateText = {healthy:'正常',unhealthy:'异常',unknown:'待更新',not_used:'未使用'};
+    const stateText = {healthy:'正常',unhealthy:'异常',unknown:'暂无近期结果',not_used:'未使用'};
     const icon = kind => h('svg',{width:18,height:18,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true},
       kind==='back'?h('path',{d:'M19 12H5m6-6-6 6 6 6'}):kind==='refresh'?h('path',{d:'M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 2M18 18A8 8 0 0 1 5 16'}):
         [h('circle',{key:'circle',cx:12,cy:12,r:9}),h('path',{key:'lines',d:'M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18'})]);
@@ -90,8 +91,8 @@ window.__ModuleLoader__.load({
       const now=Date.now()/1000;
       const current=!view.error && isFresh(data.observed_at,now);
       const nodeState=node.kind==='direct'?'not_used':current&&isFresh(node.checked_at,now)&&['healthy','unhealthy'].includes(node.state)?node.state:'unknown';
-      const nodeText=nodeState==='healthy'?'可用':nodeState==='unhealthy'?'检测异常':nodeState==='not_used'?'直连':'待更新';
-      const name=node.kind==='direct'?'当前直连':node.kind==='blocked'?'代理连接被拒绝':node.name||'当前节点待更新';
+      const nodeText=nodeState==='healthy'?'可用':nodeState==='unhealthy'?'检测异常':nodeState==='not_used'?'直连':'暂无近期检测';
+      const name=node.kind==='direct'?'当前直连':node.kind==='blocked'?'代理连接被拒绝':node.name||'暂时无法读取节点';
       const checks=Array.isArray(health.checks)?health.checks:[{id:'domestic',label:'国内',state:'unknown'},{id:'proxy',label:'代理',state:'unknown'},{id:'dns',label:'DNS',state:'unknown'}];
       const interval=valid(subscription.interval_seconds)?subscription.interval_seconds:null;
       const cadence=interval===null?'订阅更新周期待确认':interval>=3600?'订阅每 '+Number((interval/3600).toFixed(1))+' 小时更新':interval>=60?'订阅每 '+Number((interval/60).toFixed(1))+' 分钟更新':'订阅每 '+interval+' 秒更新';
@@ -102,7 +103,8 @@ window.__ModuleLoader__.load({
           h('h1',null,'网络概览'),
           h('button',{type:'button',disabled:view.loading,onClick:()=>refresh.current(),'aria-label':'刷新概览'},icon('refresh'),view.loading?'读取中':'刷新')),
         h('main',{className:'nvo-body'},
-          view.error?h('div',{role:'alert',className:'nvo-alert'},view.data?'暂时无法更新概览，下面是上次读取的数据。':'暂时无法读取概览，请稍后刷新。'):null,
+          !view.data?h('div',{role:view.loading?'status':'alert',className:view.loading?'nvo-loading':'nvo-alert'},view.loading?'正在读取网络状态…':'暂时无法读取网络状态，请稍后点击“刷新”。'):h(React.Fragment,null,
+          view.error?h('div',{role:'alert',className:'nvo-alert'},'暂时无法更新概览，下面是上次读取的数据。'):null,
           section('node','当前代理节点',[
             h('div',{key:'label',className:'nvo-row'},h('span',{className:'nvo-label'},view.data&&!current?'上次记录的代理节点':'当前代理节点'),h('span',{className:'nvo-chip','data-state':nodeState},h('span',{className:'nvo-dot'}),nodeText)),
             h('h2',{key:'name',className:'nvo-node-name','data-overview-node-name':true},name),
@@ -117,7 +119,7 @@ window.__ModuleLoader__.load({
           ]),
           section('routing','分流方式',[
             h('div',{key:'label',className:'nvo-label'},'分流方式'),
-            h('p',{key:'summary',className:'nvo-summary'},routing.summary||'分流状态待更新'),
+            h('p',{key:'summary',className:'nvo-summary'},routing.summary||'暂时无法读取分流方式'),
             h('p',{key:'detail',className:'nvo-sub'},routing.detail||'暂时无法读取实际运行规则。'),
           ]),
           section('activity','最近处理',[
@@ -126,7 +128,7 @@ window.__ModuleLoader__.load({
             h('p',{key:'subscription',className:'nvo-sub'},cadence+(valid(subscription.updated_at)?' · '+timeLabel(subscription.updated_at)+' 更新':'')),
           ]),
           h('footer',{className:'nvo-device'},valid(device.temperature_celsius)?h('span',null,'树莓派 '+Number(device.temperature_celsius.toFixed(1))+'℃'):null,
-            valid(device.free_disk_bytes)?h('span',null,'可用空间 '+Number((device.free_disk_bytes/1024**3).toFixed(1))+' GB'):null)));
+            valid(device.free_disk_bytes)?h('span',null,'可用空间 '+Number((device.free_disk_bytes/1024**3).toFixed(1))+' GB'):null))));
     }
 
     function apply(ctx){
