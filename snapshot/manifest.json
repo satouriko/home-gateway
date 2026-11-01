@@ -170,7 +170,7 @@
     },
     "snapshot/published/tool-active.json": {
       "mode": 384,
-      "sha256": "a190d00d673a53e383b6ee846fa666adfd1979fdeb2cdfa01cede0769b9ffc24"
+      "sha256": "a1c73dcf7ea1e6e2af1e4fd43386f8425238fd9868c04b81499e30d634f4db09"
     },
     "src/dsh/AGENTS.md": {
       "mode": 416,
@@ -206,7 +206,7 @@
     },
     "src/dsh/skill/SKILL.md": {
       "mode": 420,
-      "sha256": "41e24daf16ef20103c9293bbe3e6deeab58c24720f3de7cbb59980427737eddc"
+      "sha256": "09aec9a03953eeccabd2759f61ce7f40d4ca1128cae0532c31e3206eb3f33f1c"
     },
     "src/gateway/gateway_maintain.py": {
       "mode": 493,
@@ -222,7 +222,7 @@
     },
     "src/maintained/tool.py": {
       "mode": 384,
-      "sha256": "415a98bed8d1e878dca5346a37a5e2de1eda4295778e7fd2db768374f23cc75b"
+      "sha256": "7ab42fe70bdd6420c9bc851da3211a8646e50623435efc897a594214335fbf9c"
     },
     "src/operator/ai_job.py": {
       "mode": 420,
