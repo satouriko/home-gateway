@@ -18,6 +18,17 @@ def healthy_result():
       'proxy_https':{'ok':True,'result':{'http_status':204,'expected_health_status':True}}}}
 
 class RecoveryTests(unittest.TestCase):
+    def test_source_control_context_is_current_and_excludes_private_fields(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'status.json'
+            path.write_text(json.dumps({'repository_url':'https://github.com/example/project','branch':'main',
+                'result':'success','remote_commit':'a'*40,'last_success_at':123,'private_key':'must not enter model context'}))
+            result=broker.source_control_status(path)
+            self.assertTrue(result['available']);self.assertEqual(result['branch'],'main')
+            self.assertEqual(result['remote_commit'],'a'*40);self.assertNotIn('private_key',result)
+            path.write_text('broken')
+            self.assertFalse(broker.source_control_status(path)['available'])
+
     def test_policy_metadata_recovers_current_preferences_instead_of_initial_defaults(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)):
             p=Path(folder);(p/'known-good').mkdir()

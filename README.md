@@ -40,7 +40,7 @@ snapshot/           导出版本与文件校验清单
 
 ## 自动同步
 
-`main` 用于项目维护，`backup/home` 保存机器自动导出的正式部署和偏好。自动备份只推送备份分支，不覆盖主分支。
+程序维护、正式部署与偏好统一提交到 `main`。同步会检查远端历史；存在冲突或未部署的远端程序变更时停止，不强推覆盖。当前同步结果直接提供给 DeepSeek 的实时上下文。
 
 树莓派上的 `home-gateway-backup.timer` 每轮结束约 15 分钟后重新采集。程序会避开尚未验收的网络变更，检查敏感内容；只有内容变化时才提交，失败的推送会在下一轮重试。没有模型调用。GitHub 写权限由只针对本仓库的 deploy key 提供，密钥留在机器上，不进入备份。
 
@@ -53,7 +53,7 @@ snapshot/           导出版本与文件校验清单
 先取得最新部署分支：
 
 ```sh
-git clone --branch backup/home https://github.com/satouriko/home-gateway.git
+git clone --branch main https://github.com/satouriko/home-gateway.git
 cd home-gateway
 ```
 

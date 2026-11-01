@@ -102,7 +102,7 @@ class PublicBackupTests(unittest.TestCase):
                 path.write_text(json.dumps({**original, **extra}))
                 with self.assertRaises(ValueError): backup.collect(self.root)
 
-    def test_commits_only_changed_content_to_the_dedicated_remote_branch(self):
+    def test_commits_changed_content_to_main_and_skips_identical_exports(self):
         folder = Path(self.temp.name)
         origin, repo = folder / 'origin.git', folder / 'working'
         def git(*args):
@@ -116,14 +116,40 @@ class PublicBackupTests(unittest.TestCase):
         initial = git('-C', repo, 'rev-parse', 'HEAD')
         git('-C', repo, 'remote', 'add', 'origin', origin)
         git('-C', repo, 'push', 'origin', 'main')
-        git('-C', repo, 'switch', '-c', backup.BACKUP_BRANCH)
-        args = [sys.executable, str(Path(__file__).parents[1] / 'backup.py'), '--root', str(self.root), '--repository', str(repo), '--push']
+        status = folder/'sync-status.json'
+        args = [sys.executable, str(Path(__file__).parents[1] / 'backup.py'), '--root', str(self.root), '--repository', str(repo), '--push', '--status-file', str(status)]
         subprocess.run(args, check=True, capture_output=True)
-        deployed = git('--git-dir', origin, 'rev-parse', backup.BACKUP_BRANCH)
+        deployed = git('--git-dir', origin, 'rev-parse', 'main')
         self.assertNotEqual(initial, deployed)
-        self.assertEqual(git('--git-dir', origin, 'rev-parse', 'main'), initial)
         subprocess.run(args, check=True, capture_output=True)
-        self.assertEqual(git('--git-dir', origin, 'rev-parse', backup.BACKUP_BRANCH), deployed)
+        self.assertEqual(git('--git-dir', origin, 'rev-parse', 'main'), deployed)
+        saved=json.loads(status.read_text())
+        self.assertEqual(saved['branch'],'main');self.assertEqual(saved['remote_commit'],deployed)
+        self.assertEqual(saved['result'],'success')
+        git('-C',repo,'remote','set-url','origin',folder/'unreachable.git')
+        failed=subprocess.run(args,capture_output=True)
+        self.assertNotEqual(failed.returncode,0)
+        rejected=json.loads(status.read_text())
+        self.assertEqual(rejected['result'],'failed')
+        self.assertEqual(rejected['remote_commit'],deployed)
+        self.assertEqual(rejected['last_success_at'],saved['last_success_at'])
+
+    def test_remote_source_changes_stop_export_without_overwriting_local_project(self):
+        folder = Path(self.temp.name); origin = folder/'remote.git'; local = folder/'local'; other = folder/'other'
+        def git(*args):
+            return subprocess.run(['git', *map(str,args)], check=True, capture_output=True, text=True).stdout.strip()
+        git('init','--bare',origin);git('init','-b','main',local)
+        git('-C',local,'config','user.name','Test');git('-C',local,'config','user.email','test@example.invalid')
+        (local/'README.md').write_text('initial');git('-C',local,'add','.');git('-C',local,'commit','-m','test: initialize')
+        git('-C',local,'remote','add','origin',origin);git('-C',local,'push','-u','origin','main')
+        old = git('-C',local,'rev-parse','HEAD')
+        git('clone','--branch','main',origin,other)
+        git('-C',other,'config','user.name','Test');git('-C',other,'config','user.email','test@example.invalid')
+        path=other/'src/operator/new.py';path.parent.mkdir(parents=True);path.write_text('upstream implementation')
+        git('-C',other,'add','.');git('-C',other,'commit','-m','feat: update source');git('-C',other,'push')
+        with self.assertRaises(ValueError): backup.prepare_sync(local)
+        self.assertEqual(git('-C',local,'rev-parse','HEAD'),old)
+        self.assertFalse((local/'src/operator/new.py').exists())
 
 
 if __name__ == '__main__': unittest.main()

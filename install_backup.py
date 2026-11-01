@@ -45,10 +45,7 @@ def main():
     os.environ['GIT_SSH_COMMAND'] = '/usr/bin/ssh -F /etc/home-gateway-backup/ssh_config'
     repo = BASE / 'repository'
     if not repo.exists():
-        remote = subprocess.run(['git', 'ls-remote', '--heads', args.repository, 'backup/home'], check=True, capture_output=True, timeout=60)
-        branch = 'backup/home' if remote.stdout.strip() else 'main'
-        run('git', 'clone', '--branch', branch, args.repository, str(repo))
-        if branch == 'main': run('git', '-C', str(repo), 'switch', '-c', 'backup/home')
+        run('git', 'clone', '--branch', 'main', args.repository, str(repo))
     repo.chmod(0o700)
     run('git', '-C', str(repo), 'config', 'user.name', 'Home Gateway Backup')
     run('git', '-C', str(repo), 'config', 'user.email', 'home-gateway-backup@users.noreply.github.com')
@@ -60,7 +57,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /usr/local/lib/home-gateway-backup/backup.py --repository /var/lib/home-gateway-backup/repository --push
+ExecStart=/usr/bin/python3 /usr/local/lib/home-gateway-backup/backup.py --repository /var/lib/home-gateway-backup/repository --push --status-file /var/lib/home-gateway-backup/status.json
 Environment="GIT_SSH_COMMAND=/usr/bin/ssh -F /etc/home-gateway-backup/ssh_config"
 Environment=GIT_TERMINAL_PROMPT=0
 TimeoutStartSec=150

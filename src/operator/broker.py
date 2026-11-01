@@ -132,6 +132,16 @@ def policy_action(operation, patch, receipt=None):
     finally:
         temporary.unlink(missing_ok=True);release_transaction(transaction)
 
+def source_control_status(path=None):
+    path=path or Path('/var/lib/home-gateway-backup/status.json')
+    try:
+        value=json.loads(path.read_text())
+        if not isinstance(value,dict):return {'available':False}
+        keys=['repository_url','branch','expected_branch','result','last_attempt_at','last_success_at',
+              'local_commit','remote_commit','verification','error_code']
+        return {'available':True,**{key:value[key] for key in keys if key in value}}
+    except (OSError,ValueError):return {'available':False}
+
 def context():
     import hashlib
     result=status()
@@ -148,6 +158,7 @@ def context():
     from pricing import pricing_state
     result['maintenance_pricing']=pricing_state(time.time())
     result['audit_plan']=audit_plan()
+    result['source_control']=source_control_status()
     changes=STATE/'deployment-events.json'
     if changes.exists():result['recent_system_changes']=json.loads(changes.read_text())[-6:]
     path=Path('/run/net-gateway-agent/patrol-context.json')

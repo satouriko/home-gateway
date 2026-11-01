@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 CODE = ('user_policy.py patrol.py bounded.py policy.py extensions.py programs.py broker.py '
@@ -36,7 +37,7 @@ DIRECT = ([f'/usr/local/lib/net-gateway-agent/{n}' for n in CODE] +
           [f'/var/lib/dsh/state/profiles/{p}/{n}' for p in ['web', 'headless']
            for n in ['package.json', 'cordis.patch.yml']])
 PLACEHOLDER_URL = '__SUBSCRIPTION_URL__'
-BACKUP_BRANCH = 'backup/home'
+SYNC_BRANCH = 'main'
 PREFERENCE_KEYS = {'mode', 'preferred_label', 'preferred_keywords', 'allow_other_regions',
                    'allow_proxy_direct_fallback', 'mainland_direct', 'direct_domains',
                    'proxy_domains', 'excluded_keywords'}
@@ -245,12 +246,52 @@ def git(repository, *args):
                           text=True, timeout=60)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', type=Path, default=Path('/'))
-    parser.add_argument('--repository', type=Path, required=True)
-    parser.add_argument('--push', action='store_true')
-    args = parser.parse_args()
+class SyncError(ValueError):
+    """A safe reason code for the operator, without command output or credentials."""
+
+
+def prepare_sync(repository):
+    if git(repository, 'branch', '--show-current').stdout.strip() != SYNC_BRANCH:
+        raise SyncError('unexpected_branch')
+    if git(repository, 'status', '--porcelain').stdout.strip():
+        raise SyncError('uncommitted_repository_changes')
+    git(repository, 'fetch', '--no-tags', 'origin', SYNC_BRANCH)
+    remote = 'origin/' + SYNC_BRANCH
+    def ancestor(left, right):
+        return subprocess.run(['git', '-C', str(repository), 'merge-base', '--is-ancestor', left, right],
+                              capture_output=True, timeout=10).returncode == 0
+    if ancestor(remote, 'HEAD'): return
+    if not ancestor('HEAD', remote): raise SyncError('diverged_history_requires_review')
+    if git(repository, 'diff', '--name-only', 'HEAD', remote, '--', *MANAGED_TREES).stdout.strip():
+        raise SyncError('remote_program_changes_require_deployment')
+    # Documentation/project-only updates do not replace the deployed program.
+    git(repository, 'merge', '--ff-only', remote)
+
+
+def sync_status(path, repository, error=None):
+    if path is None: return
+    previous = {}
+    if path.exists():
+        try: previous = json.loads(path.read_text())
+        except ValueError: pass
+    if not isinstance(previous, dict): previous = {}
+    now = time.time()
+    status = {key: previous[key] for key in ['last_success_at', 'remote_commit'] if key in previous}
+    remote = git(repository, 'remote', 'get-url', 'origin').stdout.strip()
+    match = re.fullmatch(r'(?:git@github\.com:|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?', remote)
+    status.update(repository_url='https://github.com/' + match.group(1) if match else None,
+                  branch=git(repository, 'branch', '--show-current').stdout.strip(), expected_branch=SYNC_BRANCH,
+                  result='failed' if error else 'success', last_attempt_at=now,
+                  local_commit=git(repository, 'rev-parse', 'HEAD').stdout.strip(),
+                  verification='last successful Git push',
+                  error_code=str(error) if isinstance(error, SyncError) else type(error).__name__ if error else None)
+    if error is None: status.update(last_success_at=now, remote_commit=status['local_commit'])
+    temporary = path.with_suffix('.next')
+    temporary.write_bytes(encoded(status)); temporary.chmod(0o600); temporary.replace(path)
+
+
+def execute(args):
+    if args.push: prepare_sync(args.repository)
     with contextlib.ExitStack() as stack:
         if args.root.resolve() == Path('/'):
             if shutil.disk_usage('/').free < 4 * 1024**3: raise ValueError('preserve gateway free-space reserve')
@@ -262,15 +303,27 @@ def main():
     write_snapshot(args.repository, files)
     repository_scan(args.repository)
     if args.push:
-        if git(args.repository, 'branch', '--show-current').stdout.strip() != BACKUP_BRANCH:
-            raise ValueError('automatic updates require the dedicated backup branch')
         git(args.repository, 'add', '--', *MANAGED_TREES)
         changed = git(args.repository, 'diff', '--cached', '--name-only').stdout.strip()
         if changed:
             git(args.repository, 'commit', '-F', str(Path(__file__).with_name('snapshot-commit.txt')))
         # Push even with no new local change: the preceding push may have failed.
-        git(args.repository, 'push', 'origin', 'HEAD:' + BACKUP_BRANCH)
+        git(args.repository, 'push', 'origin', 'HEAD:' + SYNC_BRANCH)
     print(json.dumps({'exported_files': len(files), 'pushed': args.push}))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, default=Path('/'))
+    parser.add_argument('--repository', type=Path, required=True)
+    parser.add_argument('--push', action='store_true')
+    parser.add_argument('--status-file', type=Path)
+    args = parser.parse_args()
+    try: execute(args)
+    except Exception as error:
+        if args.push: sync_status(args.status_file, args.repository, error)
+        raise
+    if args.push: sync_status(args.status_file, args.repository)
 
 
 if __name__ == '__main__':
