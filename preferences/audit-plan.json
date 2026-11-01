@@ -1,4 +1,15 @@
 {
   "daily_budget": 6,
-  "interval_hours": 4
+  "enabled": true,
+  "interval_hours": 4.0,
+  "schedule": {
+    "everySeconds": 14400,
+    "execution": {
+      "executor": "home-network",
+      "kind": "external"
+    },
+    "kind": "every",
+    "prompt": "按当前用户策略复核家庭网络。对照实际连通性、DNS、节点质量和巡检程序覆盖，主动处理有证据的问题并复测；必要时维护工具和分析程序，保留已验证的经验。",
+    "title": "网络独立复核（按需执行）"
+  }
 }

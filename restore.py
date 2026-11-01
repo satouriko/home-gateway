@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import secrets
 import shutil
 import subprocess
@@ -117,6 +118,7 @@ def stage(repository, destination, credentials, uid=999):
     for name in ['sessions', 'storages', 'logs']:
         (destination / 'var/lib/dsh/state' / name).mkdir(parents=True, exist_ok=True)
     (destination / 'var/lib/dsh/workspace/.maintenance-tmp').mkdir(parents=True, exist_ok=True)
+    (destination / 'var/lib/dsh/native-task-identity').mkdir(parents=True, exist_ok=True)
     (destination / 'var/lib/net-gateway/providers').mkdir(parents=True, exist_ok=True)
     return manifest
 
@@ -154,6 +156,9 @@ def install_runtime(repository, manifest):
     for name in ['package.json', 'package-lock.json']:
         shutil.copyfile(Path(repository) / 'runtime/dsh' / name, Path('/opt/dsh') / name)
     command('npm', 'ci', '--prefix', '/opt/dsh', '--ignore-scripts')
+    command('python3', str(Path(repository) / 'tools/apply_dsh_patches.py'), '--runtime', '/opt/dsh',
+            '--patches', str(Path(repository) / 'runtime/dsh/patches'))
+    shutil.copytree(Path(repository) / 'runtime/dsh/patches', '/opt/dsh/patches', dirs_exist_ok=True)
     version = manifest['runtime']['mihomo']
     with tempfile.TemporaryDirectory() as tmp:
         archive = Path(tmp) / 'mihomo.gz'
@@ -176,6 +181,27 @@ def install_tree(source, destination):
         else: shutil.copy2(item, target)
 
 
+def link_profile_plugins(root=Path('/')):
+    """Resolve profile dependencies through the one version-locked runtime."""
+    root = Path(root)
+    for profile in ['web', 'headless']:
+        folder = root / 'var/lib/dsh/state/profiles' / profile
+        package = folder / 'package.json'
+        if not package.exists(): continue
+        for name, version in json.loads(package.read_text()).get('dependencies', {}).items():
+            if not re.fullmatch(r'(?:@[a-z0-9._-]+/)?[a-z0-9._-]+', name):
+                raise ValueError('unsupported profile dependency')
+            target = Path('/opt/dsh/node_modules') / name
+            installed = json.loads((root / target.relative_to('/') / 'package.json').read_text())
+            if installed['version'] != version: raise ValueError('profile dependency version mismatch: ' + name)
+            modules=folder/'node_modules';modules.mkdir(exist_ok=True);modules.chmod(0o755)
+            link = folder / 'node_modules' / name
+            link.parent.mkdir(parents=True, exist_ok=True);link.parent.chmod(0o755)
+            if link.is_symlink(): link.unlink()
+            if link.exists(): raise ValueError('profile dependency destination is occupied')
+            link.symlink_to(target)
+
+
 def apply(repository, credentials):
     check_credentials(credentials)
     manifest, _files = verify(repository)
@@ -194,7 +220,7 @@ def apply(repository, credentials):
     with tempfile.TemporaryDirectory() as tmp:
         staged = Path(tmp) / 'root'; stage(repository, staged, credentials, uid=user.pw_uid)
         install_tree(staged, '/')
-    for path in ['/var/lib/dsh', '/var/lib/dsh/state', '/var/lib/dsh/state/profiles', '/var/lib/dsh/state/profiles/web', '/var/lib/dsh/state/profiles/headless']:
+    for path in ['/var/lib/dsh', '/var/lib/dsh/state', '/var/lib/dsh/state/profiles', '/var/lib/dsh/state/profiles/web', '/var/lib/dsh/state/profiles/headless','/var/lib/dsh/native-task-identity']:
         os.chown(path, 0, user.pw_gid); Path(path).chmod(0o750)
     for path in ['/var/lib/dsh/workspace', '/var/lib/dsh/state/sessions', '/var/lib/dsh/state/storages', '/var/lib/dsh/state/logs']:
         shutil.chown(path, user=user.pw_uid, group=user.pw_gid)
@@ -202,8 +228,9 @@ def apply(repository, credentials):
         Path(path).chmod(0o700)
     for item in Path('/var/lib/dsh/state').rglob('*'):
         if item.is_file() and 'profiles' in item.parts: os.chown(item, 0, user.pw_gid); item.chmod(0o640)
-    for path in ['/var/lib/dsh/state/.env', '/var/lib/dsh/state/AGENTS.md', '/var/lib/dsh/lan-auto-login.mjs']:
+    for path in ['/var/lib/dsh/state/.env', '/var/lib/dsh/state/AGENTS.md', '/var/lib/dsh/lan-auto-login.mjs', '/var/lib/dsh/mobile-layout.mjs']:
         os.chown(path, 0, user.pw_gid)
+    link_profile_plugins()
     for profile in ['web', 'headless']:
         path = Path('/var/lib/dsh/state/profiles') / profile / 'cordis.yml'; os.chown(path, user.pw_uid, user.pw_gid); path.chmod(0o600)
     os.chown('/var/lib/dsh-login', 0, user.pw_gid); Path('/var/lib/dsh-login').chmod(0o770)

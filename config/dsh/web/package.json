@@ -1,7 +1,9 @@
 {
   "name": "dsh-profile-web",
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "dsh-web-mobile": "3.2.1"
+  },
   "dsh": {
     "profile": {
       "bundles": [

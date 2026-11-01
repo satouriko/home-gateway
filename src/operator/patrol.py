@@ -10,6 +10,7 @@ import hashlib
 import shutil
 from programs import inspect_active
 from pricing import routine_allowed, pricing_state
+import native_jobs as native
 
 STATE=Path('/var/lib/net-gateway-agent')
 SOCKET='/run/net-gateway-agent/control.sock'
@@ -45,7 +46,7 @@ def urgent_ai_needed(state,diagnosis,now):
 def should_run_ai(state, diagnosis, now):
     faults=fault_keys(diagnosis)
     if urgent_ai_needed(state,diagnosis,now):return True
-    if not routine_allowed(now) or state.get('pause_routine'):return False
+    if not routine_allowed(now) or state.get('pause_routine') or state.get('audit_plan',{}).get('enabled') is False:return False
     budget=state.get('audit_plan',{}).get('daily_budget',6)
     if len([at for at in state.get('routine_run_times',[]) if now-at<86400])>=budget:return False
     if faults:return audit_due(state,now) and now-state.get('last_ai_at',0)>=audit_interval(state,now)*3600
@@ -161,48 +162,55 @@ def main():
     if now-state.get('last_quality_at',0)>=1800 or faults:
         try:quality=call({'operation':'quality'});state.update(last_quality_at=now,last_quality=quality)
         except Exception:pass
-    job=subprocess.run(['systemctl','is-active',AI_SERVICE],capture_output=True,text=True).stdout.strip()
-    last_result=subprocess.run(['systemctl','show',AI_SERVICE,'-p','Result','--value'],capture_output=True,text=True).stdout.strip()
-    state['last_ai_failed']=job not in ['active','activating'] and last_result not in ['','success']
-    if job not in ['active','activating'] and last_result=='success' and state.get('last_ai_kind')=='independent_audit' and state.get('audit_completed_at')!=state.get('last_ai_at'):
-        state.update(audit_completed_at=state['last_ai_at'],successful_audits=state.get('successful_audits',0)+1)
-    plan=STATE/'audit-plan.json';state['audit_plan']=json.loads(plan.read_text()) if plan.exists() else {'daily_budget':6}
-    if time.strftime('%Y-%m-%d',time.gmtime(now))!=state.get('retry_day'):
-        state.update(retry_day=time.strftime('%Y-%m-%d',time.gmtime(now)),failed_retries_today=0)
-    disk=STATE/'storage.json';storage=json.loads(disk.read_text()) if disk.exists() else {}
-    state['pause_routine']=storage.get('pause_routine',False) or shutil.disk_usage('/').free<4*1024**3
-    running_context=json.loads(CONTEXT.read_text()) if CONTEXT.exists() else {}
-    if preempt_needed(state,diagnosis,job,running_context):
-        subprocess.run(['systemctl','stop',AI_SERVICE],check=True,timeout=15)
-        state['routine_preempted_at']=now;job='inactive'
-    if faults and job in ['active','activating'] and fault_signature(diagnosis)!=state.get('last_ai_fingerprint'):
-        running_context.update(urgent=True,observed_at=now,diagnosis=diagnosis,maintenance_trigger='additional_fault')
-        save(CONTEXT,running_context,'gateway-operators')
-    window=[value for value in state.get('ai_run_times',[]) if now-value<86400]
-    if should_run_ai(state,diagnosis,now) and job not in ['active','activating']:
-        urgent=urgent_ai_needed(state,diagnosis,now)
-        kind='anomaly' if urgent else ('independent_audit' if audit_due(state,now) or faults else 'evidence_driven_improvement')
-        context={'observed_at':now,'diagnosis':diagnosis,'history':history[-16:],'tickets':state['tickets'],
-            'diagnostic_program':program,'tracked_probes':state.get('tracked_probes',{}),
-            'maintenance_trigger':kind,'audit_rollup':rollup,
-            'urgent':urgent,'pricing':pricing_state(now),
-            'review_request':state.get('review_request'),'storage':storage,
-            'quality_summary':{'preferred_pool':(quality or state.get('last_quality',{})).get('node_pools',{}).get('us',[]),
-                               'active_domains':(quality or state.get('last_quality',{})).get('active_domains',{})}}
-        save(CONTEXT,context,'gateway-operators')
-        subprocess.run(['systemctl','start','--no-block',AI_SERVICE],check=True)
-        if state['last_ai_failed']:state['failed_retries_today']=state.get('failed_retries_today',0)+1
-        state.update(last_ai_at=now,last_ai_kind=kind,last_ai_faults=faults,last_ai_fingerprint=fault_signature(diagnosis) if faults else None,ai_run_times=[*window,now])
-        if kind=='independent_audit':state.update(last_independent_audit_at=now,last_audited_program_version=program.get('version'),audit_rollup={'samples':0,'fault_counts':{}})
-        if not urgent:
-            state['last_routine_ai_at']=now
-            state['routine_run_times']=[at for at in state.get('routine_run_times',[]) if now-at<86400]+[now]
-            if state.get('review_request'):
-                reviewed=state.setdefault('reviewed',{});reviewed[state['review_request']['fingerprint']]=now;state['reviewed']=dict(list(reviewed.items())[-32:])
-    if not faults:state.update(last_ai_faults=[],last_ai_fingerprint=None)
-    state['pricing']=pricing_state(now)
-    state['ai_job_state']=job
-    save(path,state)
+    with native.dispatch_lock(STATE):
+        job=subprocess.run(['systemctl','is-active',AI_SERVICE],capture_output=True,text=True).stdout.strip()
+        last_result=subprocess.run(['systemctl','show',AI_SERVICE,'-p','Result','--value'],capture_output=True,text=True).stdout.strip()
+        state['last_ai_failed']=job not in ['active','activating'] and last_result not in ['','success']
+        if job not in ['active','activating'] and last_result=='success' and state.get('last_ai_kind')=='independent_audit' and state.get('audit_completed_at')!=state.get('last_ai_at'):
+            state.update(audit_completed_at=state['last_ai_at'],successful_audits=state.get('successful_audits',0)+1)
+        plan=STATE/'audit-plan.json';state['audit_plan']=json.loads(plan.read_text()) if plan.exists() else {'daily_budget':6}
+        if time.strftime('%Y-%m-%d',time.gmtime(now))!=state.get('retry_day'):
+            state.update(retry_day=time.strftime('%Y-%m-%d',time.gmtime(now)),failed_retries_today=0)
+        disk=STATE/'storage.json';storage=json.loads(disk.read_text()) if disk.exists() else {}
+        state['pause_routine']=storage.get('pause_routine',False) or shutil.disk_usage('/').free<4*1024**3
+        native.supervise(diagnosis,now)
+        native_enabled=bool(native.read().get('session_id'))
+        state['native_automation']=native.status()
+        running_context=json.loads(CONTEXT.read_text()) if CONTEXT.exists() else {}
+        if preempt_needed(state,diagnosis,job,running_context):
+            subprocess.run(['systemctl','stop',AI_SERVICE],check=True,timeout=15)
+            state['routine_preempted_at']=now;job='inactive'
+        if faults and job in ['active','activating'] and fault_signature(diagnosis)!=state.get('last_ai_fingerprint'):
+            running_context.update(urgent=True,observed_at=now,diagnosis=diagnosis,maintenance_trigger='additional_fault')
+            save(CONTEXT,running_context,'gateway-operators')
+        window=[value for value in state.get('ai_run_times',[]) if now-value<86400]
+        # Native Automation owns routine AI. Emergency reasoning retains its
+        # independent process so a blocked/broken Web UI cannot prevent recovery.
+        eligible=urgent_ai_needed(state,diagnosis,now) if native_enabled else should_run_ai(state,diagnosis,now)
+        if eligible and job not in ['active','activating']:
+            urgent=urgent_ai_needed(state,diagnosis,now)
+            kind='anomaly' if urgent else ('independent_audit' if audit_due(state,now) or faults else 'evidence_driven_improvement')
+            context={'observed_at':now,'diagnosis':diagnosis,'history':history[-16:],'tickets':state['tickets'],
+                'diagnostic_program':program,'tracked_probes':state.get('tracked_probes',{}),
+                'maintenance_trigger':kind,'audit_rollup':rollup,
+                'urgent':urgent,'pricing':pricing_state(now),
+                'review_request':state.get('review_request'),'storage':storage,
+                'quality_summary':{'preferred_pool':(quality or state.get('last_quality',{})).get('node_pools',{}).get('us',[]),
+                                   'active_domains':(quality or state.get('last_quality',{})).get('active_domains',{})}}
+            save(CONTEXT,context,'gateway-operators')
+            subprocess.run(['systemctl','start','--no-block',AI_SERVICE],check=True)
+            if state['last_ai_failed']:state['failed_retries_today']=state.get('failed_retries_today',0)+1
+            state.update(last_ai_at=now,last_ai_kind=kind,last_ai_faults=faults,last_ai_fingerprint=fault_signature(diagnosis) if faults else None,ai_run_times=[*window,now])
+            if kind=='independent_audit':state.update(last_independent_audit_at=now,last_audited_program_version=program.get('version'),audit_rollup={'samples':0,'fault_counts':{}})
+            if not urgent:
+                state['last_routine_ai_at']=now
+                state['routine_run_times']=[at for at in state.get('routine_run_times',[]) if now-at<86400]+[now]
+                if state.get('review_request'):
+                    reviewed=state.setdefault('reviewed',{});reviewed[state['review_request']['fingerprint']]=now;state['reviewed']=dict(list(reviewed.items())[-32:])
+        if not faults:state.update(last_ai_faults=[],last_ai_fingerprint=None)
+        state['pricing']=pricing_state(now)
+        state['ai_job_state']=job
+        save(path,state)
     print(json.dumps({'patrol':'complete','faults':faults,'ai_triggered_at':state.get('last_ai_at'),'at':now}))
 
 if __name__=='__main__':main()

@@ -12,6 +12,14 @@ SPEC.loader.exec_module(backup)
 
 
 class PublicBackupTests(unittest.TestCase):
+    def test_repository_scan_ignores_installed_browser_dependencies_but_rejects_source_links(self):
+        repo=Path(self.temp.name)/'scan';repo.mkdir()
+        deps=Path(self.temp.name)/'deps';deps.mkdir();(deps/'fixture').write_text('sk-'+'z'*32)
+        (repo/'node_modules').symlink_to(deps)
+        backup.repository_scan(repo)
+        (repo/'source.mjs').symlink_to(deps/'fixture')
+        with self.assertRaises(ValueError):backup.repository_scan(repo)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

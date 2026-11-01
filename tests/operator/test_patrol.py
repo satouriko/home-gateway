@@ -4,6 +4,12 @@ from patrol import should_run_ai, repair_choice, fault_signature, preempt_needed
 from test_broker import healthy_result
 
 class PatrolTests(unittest.TestCase):
+    def test_restored_disabled_task_cannot_fall_back_to_legacy_routine_ai(self):
+        state={'audit_plan':{'enabled':False},'last_ai_at':0}
+        with patch('patrol.routine_allowed',return_value=True):
+            self.assertFalse(should_run_ai(state,healthy_result(),1800000000))
+            fault=healthy_result();fault['checks']['proxy_https']={'ok':False}
+            self.assertTrue(should_run_ai(state,fault,1800000000))
     @patch('patrol.routine_allowed',return_value=True)
     def test_persistent_analyzed_fault_still_gets_a_budgeted_independent_second_look(self,_allowed):
         now=1800000000;result=healthy_result();result['checks']['proxy_https']={'ok':False,'error':'TimeoutError'}

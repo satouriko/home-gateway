@@ -16,8 +16,8 @@ import time
 from urllib.parse import urlsplit
 
 CODE = ('user_policy.py patrol.py bounded.py policy.py extensions.py programs.py broker.py '
-        'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py').split()
-DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'BACKGROUND.md', 'skill/SKILL.md']
+        'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py').split()
+DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'native-maintenance.mjs', 'broker-client.mjs', 'maintenance-prompt.txt', 'BACKGROUND.md', 'skill/SKILL.md']
 UNITS = ('net-gateway-control-route.service net-gateway-agent.service net-gateway-ai-patrol.service '
          'net-gateway-patrol.timer dsh.service net-gateway.service net-gateway-maintain.service '
          'net-gateway-maintain.timer net-gateway-storage.service net-gateway-storage.timer '
@@ -32,8 +32,10 @@ DIRECT = ([f'/usr/local/lib/net-gateway-agent/{n}' for n in CODE] +
            '/etc/net-gateway/proxy-domains.yaml', '/etc/net-gateway-agent/resolv.conf',
            '/etc/net-gateway-agent/pricing.json', '/etc/net-gateway-agent/storage.json',
            '/etc/systemd/journald.conf.d/80-net-gateway-bounds.conf',
-           '/var/lib/dsh/lan-auto-login.mjs', '/var/lib/dsh/state/AGENTS.md',
+           '/var/lib/dsh/lan-auto-login.mjs', '/var/lib/dsh/mobile-layout.mjs', '/var/lib/dsh/state/AGENTS.md',
            '/opt/dsh/package.json', '/opt/dsh/package-lock.json'] +
+          [f'/opt/dsh/patches/{n}' for n in ['manifest.json','schedule-execution.patch','schedule-history-ui.patch',
+                                            'LICENSE.schedule','LICENSE.schedule-ui','schedule-provenance.json','NOTICE.md']] +
           [f'/var/lib/dsh/state/profiles/{p}/{n}' for p in ['web', 'headless']
            for n in ['package.json', 'cordis.patch.yml']])
 PLACEHOLDER_URL = '__SUBSCRIPTION_URL__'
@@ -59,6 +61,7 @@ def public_path(absolute):
                '/etc/net-gateway/proxy-domains.yaml': 'config/proxy-domains.yaml',
                '/etc/systemd/journald.conf.d/80-net-gateway-bounds.conf': 'deploy/journald.conf',
                '/var/lib/dsh/lan-auto-login.mjs': 'src/dsh/lan-auto-login.mjs',
+               '/var/lib/dsh/mobile-layout.mjs': 'src/dsh/mobile-layout.mjs',
                '/var/lib/dsh/state/AGENTS.md': 'src/dsh/AGENTS.md'}
     if absolute.startswith('/etc/net-gateway-agent/'): return 'config/' + Path(absolute).name
     return special[absolute]
@@ -175,7 +178,7 @@ def collect(root):
     audit = safe_read(root, '/var/lib/net-gateway-agent/audit-plan.json')
     if audit:
         plan = json.loads(audit)
-        files['preferences/audit-plan.json'] = encoded({k: plan[k] for k in ['interval_hours', 'daily_budget']})
+        files['preferences/audit-plan.json'] = encoded({k: plan[k] for k in ['interval_hours', 'daily_budget','enabled','schedule'] if k in plan})
     for name in ['diagnostic-active', 'tool-active']:
         data = safe_read(root, '/var/lib/net-gateway-agent/' + name + '.json')
         if data:
@@ -235,7 +238,7 @@ def repository_scan(repository):
     files = {}
     for path in Path(repository).rglob('*'):
         relative = path.relative_to(repository)
-        if any(x in {'.git', '__pycache__'} or x.startswith('.export-') for x in relative.parts): continue
+        if any(x in {'.git', '__pycache__', 'node_modules'} or x.startswith('.export-') for x in relative.parts): continue
         if path.is_symlink(): raise ValueError('repository symlink rejected')
         if path.is_file(): files[str(relative)] = path.read_bytes()
     scan(files)

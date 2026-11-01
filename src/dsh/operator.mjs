@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import net from 'node:net';
+import { callBroker } from './broker-client.mjs';
 
 const require = createRequire('/opt/dsh/package.json');
 const { defineTool } = await import(require.resolve('@deepseek-ai/dsh-tools'));
@@ -21,29 +21,6 @@ async function candidateSource(args, extension = '.py') {
   return args.source;
 }
 
-function callBroker(request, signal, timeout = 300000) {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection('/run/net-gateway-agent/control.sock');
-    let body = '';
-    let received=false;
-    const abort = () => socket.destroy(new Error('gateway operation cancelled'));
-    signal?.addEventListener('abort', abort, { once: true });
-    socket.setTimeout(timeout, () => socket.destroy(new Error('gateway tool timed out; protected recovery may still be running')));
-    socket.on('connect', () => socket.write(JSON.stringify(request) + '\n'));
-    socket.on('error', reject);
-    socket.on('data', chunk => {
-      body += chunk.toString('utf8');
-      if (body.length > 1048576) return socket.destroy(new Error('gateway response too large'));
-      if (body.includes('\n')) {
-        received=true;
-        try { resolve(JSON.parse(body.slice(0, body.indexOf('\n')))); } catch (error) { reject(error); }
-        socket.end();
-      }
-    });
-    socket.on('end',()=>{if(!received) reject(new Error('gateway closed without a response'));});
-    socket.on('close', () => signal?.removeEventListener('abort', abort));
-  });
-}
 
 export function apply(ctx, config = {}) {
   const requests=new WeakMap();
@@ -70,11 +47,14 @@ export function apply(ctx, config = {}) {
     if(receiptTurns.get(agent)!==turn){requests.delete(agent);receiptTurns.set(agent,turn);}
     const kind=config.readOnly?'canary':process.env.NET_GATEWAY_JOB_KIND==='patrol'?'patrol':null;
     if(kind && !registered.has(agent)){
-      try{await callBroker({operation:'maintenance_register',session_id:agent.id,kind},signal,5000);registered.add(agent);}catch{}
+      try{await callBroker({operation:'maintenance_register',session_id:agent.id,kind},signal,5000);registered.add(agent);
+        if(kind==='patrol'){
+          try{await fetch('http://192.168.2.4/api/session/projections',{method:'POST',headers:{'Content-Type':'application/json',Origin:'http://192.168.2.4'},signal:AbortSignal.any([signal,AbortSignal.timeout(3000)].filter(Boolean)),body:JSON.stringify({type:'client-request',rpcId:'background-account-'+agent.id,method:'session/projections',payload:{args:{request:{sessionId:agent.id}}}})});}catch{}
+        }}catch{}
     }
     if(process.env.NET_GATEWAY_JOB_KIND==='patrol' && !titled.has(agent)){
       const titles=ctx.get('sessionTitle');
-      if(titles){titles.rename(agent.session,'后台巡检 · '+new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}));titled.add(agent);}
+      if(titles){titles.rename(agent.session,(process.env.NET_GATEWAY_JOB_URGENT==='1'?'网络故障处理 · ':'网络AI复核 · ')+new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}));titled.add(agent);}
     }
     refreshSkill();
     try { const reply = await callBroker({ operation: 'context' }, signal, 5000); liveContext = reply.ok ? reply.result : { available: false, error: reply.error }; }
@@ -91,11 +71,16 @@ export function apply(ctx, config = {}) {
   });
   ctx.tools.register(defineTool({
     name:'gateway_audit_plan',description:'按实际覆盖、程序成熟度、误报漏报和成本调整独立AI审计策略；这是运维调度，不改变用户分流目标。常规检查仍由程序执行，新故障/聊天立即处理。',
-    parameters:{operation:{type:'string',required:true,enum:['get','set']},interval_hours:{type:'number',description:'独立审计间隔2到24小时。'},daily_budget:{type:'number',description:'常规AI任务每日预算1到12次；有效间隔同时满足此预算。'},reason:{type:'string',description:'调整依据：测试覆盖、采样、程序版本、近期漏检/误判或稳定证据。'}},
+    parameters:{operation:{type:'string',required:true,enum:['get','set','restore']},interval_hours:{type:'number',description:'独立审计间隔2到24小时。'},daily_budget:{type:'number',description:'常规AI任务每日预算1到12次；有效间隔同时满足此预算。'},reason:{type:'string',description:'调整依据：测试覆盖、采样、程序版本、近期漏检/误判或稳定证据。'}},
     output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},
     async execute(args,exec){
       if(args.operation==='get')return JSON.stringify(await callBroker({operation:'audit_plan'},exec.signal));
       if(config.readOnly)throw new Error('canary cannot change audit policy');
+      if(args.operation==='restore'){
+        const receipt=requests.get(exec.agent);
+        if(!receipt)throw new Error('restoring a deleted task requires an explicit current chat request');
+        return JSON.stringify(await callBroker({operation:'audit_plan_enable',receipt},exec.signal));
+      }
       return JSON.stringify(await callBroker({operation:'audit_plan_set',interval_hours:args.interval_hours,daily_budget:args.daily_budget??6,reason:args.reason},exec.signal));
     },presentCall(args){return {card:'generic',title:'调整网络审计策略',kind:args.operation==='get'?'read':'write'};},
   }));
@@ -148,7 +133,10 @@ export function apply(ctx, config = {}) {
       async execute(args, exec) {
         if (config.readOnly && args.operation !== 'status') throw new Error('canary permits metadata reads only');
         const payload = { operation: prefix + args.operation };
-        if(prefix==='skill_' && ['test','publish'].includes(args.operation) && process.env.NET_GATEWAY_ROUTINE_DEADLINE)payload.deadline=Number(process.env.NET_GATEWAY_ROUTINE_DEADLINE);
+        if(prefix==='skill_' && ['test','publish'].includes(args.operation)){
+          const deadline=process.env.NET_GATEWAY_ROUTINE_DEADLINE?Number(process.env.NET_GATEWAY_ROUTINE_DEADLINE):undefined;
+          if(deadline){payload.deadline=deadline;payload.maintenance_session=exec.agent.id;}
+        }
         if (['test','publish'].includes(args.operation)) payload.source = await candidateSource(args, prefix === 'skill_' ? '.md' : '.py');
         if (args.operation === 'run') payload.request = JSON.parse(args.request || '{"operation":"inspect"}');
         return JSON.stringify(await callBroker(payload, exec.signal));
@@ -159,18 +147,23 @@ export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
     name: 'gateway_note', description: '读取和保存网关运维经验、候选自迭代提案。保存在可写工作区，不会修改正式程序。',
     parameters: {
-      operation: { type: 'string', required: true, enum: ['list','lesson','proposal'] },
+      operation: { type: 'string', required: true, enum: ['list','get','lesson','proposal'] },
+      id: { type:'string',description:'get读取list返回的条目id。仅按需展开相关经验。' },
       summary: { type: 'string', description: '经验或提案，包含已验证结果或明确未验证的部分。' },
       evidence: { type: 'string', description: '实际工具证据、测试结果、当前用户策略、安全边界和回退办法。' },
     },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute(args) {
-      if (config.readOnly && args.operation !== 'list') return JSON.stringify({ dry_run: true, saved: false });
+      if (config.readOnly && !['list','get'].includes(args.operation)) return JSON.stringify({ dry_run: true, saved: false });
       await mkdir(NOTES, { recursive: true, mode: 0o700 });
       if (args.operation === 'list') {
         const names = (await readdir(NOTES)).filter(name => /^\d+-[a-f0-9-]+\.json$/.test(name)).sort().slice(-12);
-        const notes = await Promise.all(names.map(async name => JSON.parse(await readFile(NOTES + '/' + name, 'utf8'))));
+        const notes = await Promise.all(names.map(async name => {const item=JSON.parse(await readFile(NOTES+'/'+name,'utf8'));return{id:name,kind:item.kind,created_at:item.created_at,summary:item.summary.slice(0,1000),has_evidence:!!item.evidence};}));
         return JSON.stringify({ notes, caution: '经验是证据材料；当前用户策略以实时查询为准，不能用旧经验覆盖。' });
+      }
+      if(args.operation==='get'){
+        if(!/^\d+-[a-f0-9-]+\.json$/.test(args.id||''))throw new Error('valid note id required');
+        return await readFile(NOTES+'/'+args.id,'utf8');
       }
       if (!['lesson','proposal'].includes(args.operation) || typeof args.summary !== 'string' || typeof args.evidence !== 'string' || args.summary.length > 6000 || args.evidence.length > 6000) throw new Error('provide bounded summary and evidence');
       const note = { kind: args.operation, summary: args.summary, evidence: args.evidence, created_at: new Date().toISOString(), deployment: 'not_applied' };

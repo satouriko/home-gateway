@@ -1,10 +1,12 @@
+import { installMobileViewport, installInspectionRecords, MOBILE_LAYOUT_CSS } from './mobile-layout.mjs';
+
 export const name = 'lan-auto-login';
 export const inject = ['connection', 'webServer'];
 
 export function apply(ctx) {
   // Seed the supported locale bridge before client plugins mount.
   if (ctx.webServer.tapIndex) {
-    const bootstrap = '<script>window.__DSH_LOCALE__=window.__DSH_LOCALE__||{read:function(){return Promise.resolve({languages:["zh-CN"],preference:"zh"})},onChange:function(){}};</script>';
+    const bootstrap = '<style>'+MOBILE_LAYOUT_CSS+'</style><script>window.__DSH_LOCALE__=window.__DSH_LOCALE__||{read:function(){return Promise.resolve({languages:["zh-CN"],preference:"zh"})},onChange:function(){}};(' + installMobileViewport.toString() + ')();(' + installInspectionRecords.toString() + ')();</script>';
     ctx.effect(() => ctx.webServer.tapIndex(html => html.replace('<head>', '<head>' + bootstrap).replace('lang="en"', 'lang="zh-CN"')));
   }
   const connection = ctx.connection;

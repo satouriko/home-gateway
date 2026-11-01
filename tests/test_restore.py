@@ -18,6 +18,7 @@ class RestoreTests(unittest.TestCase):
         fixture = test_backup.PublicBackupTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        self.fixture=fixture
         self.temp = Path(fixture.temp.name)
         self.repo = self.temp / 'repository'; self.repo.mkdir()
         backup.write_snapshot(self.repo, backup.collect(fixture.root))
@@ -83,6 +84,43 @@ class RestoreTests(unittest.TestCase):
             with self.assertRaises(StopAfterApt): restore.install_runtime(self.repo, {})
         installed = next(args for args in requests if args[:2] == ('apt-get', 'install'))
         self.assertIn('python3-yaml', installed)
+
+    def test_deleted_native_task_definition_recovers_without_reenabling_or_restoring_history(self):
+        plan={'interval_hours':6,'daily_budget':4,'enabled':False,
+              'schedule':{'kind':'every','title':'家庭复核','prompt':'只读检查网络','everySeconds':21600},
+              'session_id':'private-session','lastDelivery':{'private':'history'}}
+        self.fixture.put('/var/lib/net-gateway-agent/audit-plan.json',json.dumps(plan))
+        backup.write_snapshot(self.repo,backup.collect(self.fixture.root))
+        stored=json.loads((self.repo/'preferences/audit-plan.json').read_text())
+        self.assertNotIn('session_id',stored);self.assertNotIn('lastDelivery',stored)
+        target=self.temp/'restored-task'
+        restore.stage(self.repo,target,self.credentials)
+        recovered=json.loads((target/'var/lib/net-gateway-agent/audit-plan.json').read_text())
+        self.assertFalse(recovered['enabled']);self.assertEqual(recovered['schedule'],plan['schedule'])
+        self.assertFalse((target/'var/lib/net-gateway-agent/native-maintenance.json').exists())
+
+    def test_profile_plugins_resolve_from_locked_runtime_after_restore(self):
+        root = self.temp / 'plugin-root'
+        profile = root / 'var/lib/dsh/state/profiles/web'
+        profile.mkdir(parents=True)
+        (profile / 'package.json').write_text(json.dumps({'dependencies': {'dsh-web-mobile': '3.2.1'}}))
+        package = root / 'opt/dsh/node_modules/dsh-web-mobile'
+        package.mkdir(parents=True)
+        (package / 'package.json').write_text('{"version":"3.2.1"}')
+        previous=os.umask(0o077)
+        try:restore.link_profile_plugins(root)
+        finally:os.umask(previous)
+        self.assertEqual((profile/'node_modules').stat().st_mode & 0o777,0o755)
+        link = profile / 'node_modules/dsh-web-mobile'
+        self.assertEqual(link.readlink(), Path('/opt/dsh/node_modules/dsh-web-mobile'))
+        restore.link_profile_plugins(root)
+        (package / 'package.json').write_text('{"version":"3.2.0"}')
+        with self.assertRaises(ValueError): restore.link_profile_plugins(root)
+
+    def test_protected_native_identity_directory_is_created_for_broker_sandbox(self):
+        target=self.temp/'native-identity'
+        restore.stage(self.repo,target,self.credentials)
+        self.assertTrue((target/'var/lib/dsh/native-task-identity').is_dir())
 
 
 if __name__ == '__main__': unittest.main()

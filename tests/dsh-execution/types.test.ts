@@ -1,0 +1,20 @@
+import type { ScheduleRecord, ScheduleDeliveryReceipt, ScheduleExecutor } from '../../runtime/dsh/node_modules/@deepseek-ai/dsh-schedule/lib/types/types.js';
+import type { ScheduleService } from '../../runtime/dsh/node_modules/@deepseek-ai/dsh-schedule/lib/types/index.js';
+import type { ScheduleTask } from '../../runtime/dsh/node_modules/@deepseek-ai/dsh-schedule/lib/types/storage.js';
+import { SessionId } from '../../runtime/dsh/node_modules/@deepseek-ai/dsh-session/lib/index.js';
+import { ScheduleId } from '../../runtime/dsh/node_modules/@deepseek-ai/dsh-schedule/lib/types/domain.js';
+const sessionId=SessionId('origin');
+const id=ScheduleId('task');
+const record: ScheduleRecord={id,kind:'every',title:'Audit',prompt:'Inspect',everySeconds:60,scheduledAt:'2026-11-01T00:00:00.000Z',execution:{kind:'external',executor:'home-network'}};
+const receipt: ScheduleDeliveryReceipt={kind:'execution',executionId:'run',scheduledAt:'2026-11-01T00:00:00.000Z',deliveredAt:'2026-11-01T00:00:01.000Z',status:'pending'};
+// @ts-expect-error External execution does not fabricate an inbox message identity.
+const fake: ScheduleDeliveryReceipt={...receipt,messageId:'fake'};
+const callback: ScheduleExecutor=async({task,occurrenceAt,executionId,signal})=>({executionId,status:signal.aborted?'failed':'started',summary:`${task.record.title} ${task.sessionId} ${occurrenceAt}`});
+const task: ScheduleTask={sessionId,record,status:'active',lastDelivery:receipt,deliveryHistory:{records:[receipt],earlierRecordsUnavailable:false},pendingExecution:{executionId:'run',occurrenceAt:receipt.scheduledAt,record}};
+declare const schedule: ScheduleService;
+schedule.registerExecutor('home-network',callback);
+schedule.create(sessionId,{title:'Atomic external task',prompt:'Inspect',every_seconds:60,execution:{kind:'external',executor:'home-network'}});
+schedule.configureExecution({sessionId,id,execution:{kind:'external',executor:'home-network'}});
+schedule.completeExecution({sessionId,id,executionId:'run',status:'completed',summary:'Done',executionSessionId:'fresh'});
+schedule.history({sessionId,id,limit:10,beforeDeliveryId:'run'});
+void task; void fake;

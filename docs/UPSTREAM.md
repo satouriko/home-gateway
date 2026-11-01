@@ -3,6 +3,7 @@
 | 组件 | 当前基线 | 来源 | 本地扩展方式 |
 |---|---|---|---|
 | DeepSeek Harness | 0.2.1-rc.5，npm lock 固定依赖 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | 独立插件、profile patch、方法 skill |
+| dsh-web-mobile | 3.2.1 | [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile) | 客户端插件及独立手机样式、手势补丁 |
 | Mihomo | 1.19.33，manifest 保存二进制校验值 | [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) | 独立配置、节点维护与网络程序 |
 | Node.js | 24.14.1 | [Node.js](https://nodejs.org/) | 上游发行包，安装时校验 SHA256 |
 
@@ -17,3 +18,16 @@ DSH 依赖位于 `runtime/dsh/package-lock.json`。上游完整安装目录不�
 5. 更新实际版本记录、测试与兼容说明。仅更新版本号或依赖安装成功，不表示升级验收通过。
 
 社区插件也按相同方式记录来源、锁定版本和测试。新增插件不能直接修改凭据、受保护的启动配置或恢复程序；前端适配要覆盖手机、平板与桌面。
+
+
+手机插件的 peer 范围不接纳当前 DSH 预发布版本。`runtime/dsh/package.json` 对该插件使用精确 peer overrides，保持已安装的 DSH 基线；普通 `npm ci` 能完整重建依赖，不使用 `--legacy-peer-deps`。命名 profile 通过受控链接引用同一套锁定依赖，恢复器核对版本后重建链接。
+
+手机额外适配位于 `src/dsh/mobile-layout.mjs`，由原有中文/LAN 插件注入，不改 npm 安装产物。页面禁止手势缩放，文本字段至少16px，避免 iOS 聚焦自动放大；代码、长消息和工具栏需要分别验证，不能只检查空会话或 document.scrollWidth。Safari 浏览器自身的边缘历史导航并不完全受网页 CSS 控制，边缘拦截只能作用于页面收到的触摸事件。
+
+## 原生独立执行扩展
+
+`runtime/dsh/patches` 保存针对固定 npm 制品的 MIT 补丁、许可证、来源与前后哈希。它为调度器增加独立执行器和有界真实回执，为原生任务页增加执行状态、摘要及独立会话链接。普通会话提醒保持原语义。恢复安装在 npm ci 后调用 `tools/apply_dsh_patches.py`；依赖或哈希变化必须复核，不能强行套用旧补丁。
+
+执行身份先持久化再调用外部执行器，重启重放使用同一身份；执行器未注册时保持待处理，不退回来源会话调用模型。原生历史仍使用原有条数/日期保留规则。升级源码应修改上游 TypeScript 模块和客户端组件后重新生成 Typert；目前公开仓库保存可重放的固定制品补丁，尚未声明已合并上游。
+
+旧 SDK 不理解新增任务字段。回退必须停止 DSH 并同步恢复兼容的任务数据，不能只移除代码补丁，也不能用旧的完整会话目录覆盖新增用户聊天。

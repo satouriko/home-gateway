@@ -26,6 +26,12 @@ snapshot/           导出版本与文件校验清单
 
 开发流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，上游兼容性见 [docs/UPSTREAM.md](docs/UPSTREAM.md)。
 
+## 聊天与主动维护
+
+手机界面使用完整宽度的对话和遮罩侧栏。家庭运维会话集中在一个工作区；原生 Automation 保留同一个常规复核任务，时间与内容可在任务管理中编辑。每次真正调用 AI 时启动新的独立会话，历史显示实际执行结果和会话链接；程序先检查谷价、预算与存储，跳过时不创建空会话。三分钟程序巡检、已知修复和独立紧急维护继续运行。
+
+验证范围与浏览器复现方法见 [docs/VALIDATION.md](docs/VALIDATION.md)。
+
 ## 备份范围
 
 - DSH 运维插件、局域网访问与中文界面补丁、身份说明、方法 skill、Web/headless profile。

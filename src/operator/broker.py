@@ -123,8 +123,12 @@ def audit_plan():
     plan=json.loads(path.read_text()) if path.exists() else {'interval_hours':4,'daily_budget':6,'reason':'new deployment; adapt from observed coverage and stable samples','expires_at':0}
     sample=STATE/'patrol.json';state=json.loads(sample.read_text()) if sample.exists() else {}
     from patrol import audit_interval
+    from native_jobs import effective_state,read as native_read
+    state=effective_state(state,native_read())
+    actual=(native_read().get('observed_task') or {})
     state['audit_plan']=plan
-    return {**plan,'effective_interval_hours':audit_interval(state,time.time()),'selection_applies':plan.get('expires_at',0)>time.time() and plan.get('for_program_version')==state.get('diagnostic_program',{}).get('version')}
+    if actual.get('kind')=='every':state['audit_plan']={**plan,'interval_hours':actual['everySeconds']/3600,'expires_at':time.time()+60,'for_program_version':state.get('diagnostic_program',{}).get('version')}
+    return {**plan,'native_schedule':actual,'effective_interval_hours':audit_interval(state,time.time()),'selection_applies':plan.get('expires_at',0)>time.time() and plan.get('for_program_version')==state.get('diagnostic_program',{}).get('version')}
 
 def checkpoint(config, approved):
     directory=STATE/'checkpoints'/uuid.uuid4().hex;directory.mkdir(parents=True,mode=0o700)
@@ -195,6 +199,8 @@ def context():
     from pricing import pricing_state
     result['maintenance_pricing']=pricing_state(time.time())
     result['audit_plan']=audit_plan()
+    from native_jobs import context_summary
+    result['native_automation']=context_summary()
     result['source_control']=source_control_status()
     changes=STATE/'deployment-events.json'
     if changes.exists():result['recent_system_changes']=json.loads(changes.read_text())[-6:]
@@ -345,10 +351,34 @@ def repair(operation):
 def dispatch(request):
     data=validate_request(request);op=data['operation']
     if op=='status':return status()
+    if op.startswith('native_'):
+        import native_jobs as native
+        if op=='native_status':return native.status()
+        if op=='native_inspection':return native.inspection(data['session_id'])
+        if op=='native_observe':return native.observe(data['task'])
+        if op=='native_bind':
+            result=native.bind(data['session_id'],data['schedule_id'])
+            dispatch({'operation':'maintenance_register','session_id':data['session_id'],'kind':'automation'})
+            return result
+        if op=='native_admit':
+            path=STATE/'patrol.json';state=json.loads(path.read_text()) if path.exists() else {}
+            return native.dispatch_job(native.admit(data['session_id'],state,occurrence=data.get('occurrence'),execution_id=data.get('execution_id')),data.get('task_prompt'),getattr(REQUEST,'cancelled',lambda:False))
+        if op=='native_check':return native.check(data['session_id'],data['job_id'])
+        if op=='native_finish':return native.finish(data['session_id'],data['job_id'],data['outcome'],execution_session_id=data.get('execution_session_id'),summary=data.get('summary'))
     if op=='audit_plan':return audit_plan()
+    if op=='audit_plan_enable':
+        if not data.get('receipt'):raise ValueError('restoring a deleted task requires an explicit chat request')
+        import native_jobs as native
+        with native.locked():
+            record=native.read();record.update(enabled=True,provision_requested=True);native.save(record)
+        plan=audit_plan();plan['enabled']=True;write_state(STATE/'audit-plan.json',plan);return {'restore_requested':True}
     if op=='audit_plan_set':
+        from native_jobs import update_schedule
+        update_schedule(data['interval_hours'])
         program=STATE/'diagnostic-active.json'
-        record={key:data[key] for key in ['interval_hours','daily_budget','reason']}
+        plan_path=STATE/'audit-plan.json'
+        record=json.loads(plan_path.read_text()) if plan_path.exists() else {}
+        record.update({key:data[key] for key in ['interval_hours','daily_budget','reason']})
         record.update(chosen_at=time.time(),expires_at=time.time()+7*86400,for_program_version=json.loads(program.read_text()).get('version') if program.exists() else None)
         write_state(STATE/'audit-plan.json',record);return record
     if op=='maintenance_register':
@@ -356,6 +386,7 @@ def dispatch(request):
             path=STATE/'background-sessions.json';records=json.loads(path.read_text()) if path.exists() else {}
             record=records.setdefault(data['session_id'],{'first_seen':time.time(),'kind':data['kind']})
             if data['kind']=='user':record['user_chat']=True
+            if data['kind']=='automation':record['kind']='automation'
             write_state(path,dict(list(records.items())[-10000:]))
         return {'registered':True}
     if op=='diagnose':return diagnose()
@@ -388,7 +419,7 @@ def dispatch(request):
 def handle(request):
     result=dispatch(request);op=request.get('operation')
     published=(op in ['program_publish','tool_publish','skill_publish'] and result.get('deployed') is True)
-    published=published or op=='audit_plan_set' or (op=='policy_apply' and result.get('verified_healthy') is True and result.get('rollback_armed') is False)
+    published=published or op in ['audit_plan_set','audit_plan_enable'] or (op=='native_observe' and result.get('preference_changed')) or (op=='policy_apply' and result.get('verified_healthy') is True and result.get('rollback_armed') is False)
     if published:
         try:sync=queue_source_sync(op)
         except Exception:sync={'requested':False,'retry':'independent timer'}
@@ -415,6 +446,8 @@ class UnixHandler(socketserver.StreamRequestHandler):
             except OSError:return True
         REQUEST.cancelled=cancelled
         readonly=uid not in [0,pwd.getpwnam('dsh').pw_uid] or 'net-gateway-skill-canary-' in cgroup
+        if request.get('operation') in ['native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable'] and not (uid==0 or (uid==pwd.getpwnam('dsh').pw_uid and ('/dsh.service' in cgroup or (request.get('operation')=='native_finish' and 'net-gateway-ai-patrol' in cgroup)))):
+            self.wfile.write(b'{"ok":false,"error":"PermissionError","message":"native maintenance requires the Web runtime"}\n');return
         registered=request.get('operation')=='maintenance_register'
         allowed_registration=uid==0 or (uid==pwd.getpwnam('dsh').pw_uid and ((request.get('kind')=='canary' and 'net-gateway-skill-canary-' in cgroup) or (request.get('kind')=='patrol' and 'net-gateway-ai-patrol' in cgroup) or (request.get('kind')=='user' and '/dsh.service' in cgroup)))
         if registered and not allowed_registration:
@@ -432,7 +465,15 @@ class UnixHandler(socketserver.StreamRequestHandler):
                 if clock['peak'] or not isinstance(deadline,(int,float)) or deadline<=time.time():
                     self.wfile.write(b'{"ok":false,"error":"ValueError","message":"routine skill evaluation waits for its next off-peak budget"}\n');return
                 if clock['off_peak_seconds_remaining']:deadline=min(deadline,time.time()+clock['off_peak_seconds_remaining']-60)
+                if context.get('native_deadline'):deadline=min(deadline,context['native_deadline'])
                 request['deadline']=deadline
+        if request.get('operation') in ['skill_test','skill_publish'] and request.get('maintenance_session') and '/dsh.service' in cgroup:
+            import native_jobs as native
+            current=native.read();runs=current.get('runs',[]);job=runs[-1] if runs else {}
+            if request['maintenance_session']==current.get('session_id') and job.get('state')=='running':
+                if not native.check(current['session_id'],job['id'])['continue']:
+                    self.wfile.write(b'{"ok":false,"error":"ValueError","message":"native routine budget ended"}\n');return
+                request['deadline']=min(request.get('deadline',0),job['deadline'])
         self.wfile.write(json.dumps(envelope(request),ensure_ascii=False).encode()+b'\n')
 
 class UnixServer(socketserver.ThreadingUnixStreamServer):
@@ -505,6 +546,8 @@ def watchdog():
 if __name__=='__main__':
     if '--watchdog' in sys.argv:watchdog();raise SystemExit(0)
     STATE.mkdir(mode=0o700,parents=True,exist_ok=True)
+    from native_jobs import publish_identity
+    publish_identity()
     if Path(SOCKET).exists():Path(SOCKET).unlink()
     unix=UnixServer(SOCKET,UnixHandler)
     os.chown(SOCKET,0,grp.getgrnam('gateway-operators').gr_gid);os.chmod(SOCKET,0o660)

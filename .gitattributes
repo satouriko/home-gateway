@@ -1,0 +1,2 @@
+# Unified patches contain upstream context indentation.
+runtime/dsh/patches/*.patch -whitespace

@@ -20,6 +20,7 @@ def main():
     restore.verify(ROOT)
     backup.repository_scan(ROOT)
     if shutil.which('node'):
+        subprocess.run(['node', '--test', *map(str, sorted((ROOT / 'tests').glob('*.test.mjs')))], check=True)
         for path in (ROOT / 'src').rglob('*.mjs'):
             subprocess.run(['node', '--check', str(path)], check=True)
     print('Tests, snapshot integrity, public-content scan and available JavaScript syntax checks passed.')

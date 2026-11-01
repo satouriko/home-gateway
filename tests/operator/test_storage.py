@@ -37,6 +37,15 @@ class StorageTests(unittest.TestCase):
                 fcntl.flock(handle,fcntl.LOCK_EX)
                 result=prune_background(base,registry,0,1)
             self.assertTrue(dirs[0].exists());self.assertTrue(dirs[1].exists());self.assertFalse(dirs[2].exists());self.assertTrue(dirs[3].exists())
+    def test_native_task_origin_survives_worker_retention_without_a_live_writer_lock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder);workspace=base/'workspace';workspace.mkdir();registry={};origin=None
+            for number in range(10):
+                name='session-'+str(number).zfill(36);path=workspace/name;path.mkdir();(path/'session.lock').touch();(path/'log').write_bytes(b'x'*100)
+                registry[name]={'kind':'automation' if number==0 else 'patrol'};os.utime(path,(number+1,number+1))
+                if number==0:origin=path
+            result=prune_background(base,registry,0,1)
+            self.assertTrue(origin.exists());self.assertNotIn(origin.name,result['removed']);self.assertTrue(result['removed'])
     def test_duplicate_reports_have_a_count_limit(self):
         with tempfile.TemporaryDirectory() as folder:
             p=Path(folder)

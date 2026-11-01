@@ -2,11 +2,11 @@
 import ipaddress
 import re
 
-READS = {'status', 'diagnose', 'probe', 'quality', 'patrol_status', 'policy', 'context','audit_plan'}
+READS = {'status', 'diagnose', 'probe', 'quality', 'patrol_status', 'policy', 'context','audit_plan','native_status','native_inspection'}
 REPAIRS = {'recheck_nodes', 'refresh_subscription', 'restart_gateway', 'restore_gateway'}
 PROGRAMS = {'program_status','program_test','program_publish','tool_status','tool_test','tool_publish','tool_run','skill_status','skill_test','skill_publish'}
 POLICY = {'policy_test','policy_apply'}
-AUX={'maintenance_register','audit_plan_set'}
+AUX={'maintenance_register','audit_plan_set','native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable'}
 
 def validate_request(request):
     if not isinstance(request, dict) or request.get('operation') not in READS | REPAIRS | PROGRAMS | POLICY | AUX:
@@ -15,16 +15,55 @@ def validate_request(request):
     allowed = {'operation','preferences','receipt'} if operation in POLICY else ({'operation', 'target'} if operation == 'probe' else ({'operation','source'} if operation in ['program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish'] else ({'operation','request'} if operation=='tool_run' else {'operation'})))
     if operation=='maintenance_register':allowed={'operation','session_id','kind'}
     if operation=='audit_plan_set':allowed={'operation','interval_hours','daily_budget','reason'}
-    if operation in ['skill_test','skill_publish']:allowed.add('deadline')
+    if operation=='audit_plan_enable':allowed={'operation','receipt'}
+    if operation.startswith('native_') and operation!='native_status':
+        allowed={'operation','session_id'}
+        if operation=='native_bind':allowed.add('schedule_id')
+        if operation in ['native_check','native_finish']:allowed.add('job_id')
+        if operation=='native_finish':allowed.update(['outcome','execution_session_id','summary'])
+        if operation=='native_admit':allowed.update(['occurrence','task_prompt','execution_id'])
+        if operation=='native_observe':allowed={'operation','task'}
+    if operation in ['skill_test','skill_publish']:allowed.update(['deadline','maintenance_session'])
     if set(request) - allowed:
         raise ValueError('unexpected fields')
     result = {'operation': operation}
+    if operation=='audit_plan_enable':result['receipt']=request.get('receipt')
+    if operation=='native_observe':
+        task=request.get('task')
+        if task is not None and (not isinstance(task,dict) or len(str(task))>24000):raise ValueError('bounded task definition required')
+        result['task']=task
+    elif operation.startswith('native_') and operation!='native_status':
+        if not re.fullmatch(r'session-[a-f0-9-]{36}',str(request.get('session_id',''))):raise ValueError('valid native session identity required')
+        result['session_id']=request['session_id']
+        if operation=='native_bind':
+            if not re.fullmatch(r'schedule-[a-f0-9-]{36}',str(request.get('schedule_id',''))):raise ValueError('valid native task identity required')
+            result['schedule_id']=request['schedule_id']
+        if operation in ['native_check','native_finish']:
+            if not re.fullmatch(r'[a-f0-9]{32}',str(request.get('job_id',''))):raise ValueError('valid maintenance lease required')
+            result['job_id']=request['job_id']
+        if operation=='native_admit':
+            occurrence=request.get('occurrence')
+            if occurrence is not None and (not isinstance(occurrence,str) or len(occurrence)>200):raise ValueError('bounded occurrence required')
+            prompt=request.get('task_prompt','')
+            if not isinstance(prompt,str) or len(prompt)>16000:raise ValueError('bounded task prompt required')
+            execution_id=request.get('execution_id')
+            if execution_id is not None and not re.fullmatch(r'[a-f0-9]{32}',execution_id):raise ValueError('valid execution identity required')
+            result.update(occurrence=occurrence,task_prompt=prompt,execution_id=execution_id)
+        if operation=='native_finish':
+            if request.get('outcome') not in ['completed','failed','interrupted','expired']:raise ValueError('invalid maintenance outcome')
+            result['outcome']=request['outcome']
+            if request.get('execution_session_id'):
+                if not re.fullmatch(r'session-[a-f0-9-]{36}',request['execution_session_id']):raise ValueError('valid execution session required')
+                result['execution_session_id']=request['execution_session_id']
+            if request.get('summary'):
+                if not isinstance(request['summary'],str) or len(request['summary'])>1500:raise ValueError('bounded execution summary required')
+                result['summary']=request['summary']
     if operation=='audit_plan_set':
         hours=request.get('interval_hours');budget=request.get('daily_budget',6);reason=request.get('reason')
         if not isinstance(hours,(int,float)) or not 2<=hours<=24 or not isinstance(budget,int) or not 1<=budget<=12 or not isinstance(reason,str) or not 1<=len(reason)<=1000:raise ValueError('audit interval 2-24h, daily routine budget 1-12, and evidence reason required')
         result.update(interval_hours=hours,daily_budget=budget,reason=reason)
     if operation=='maintenance_register':
-        if request.get('kind') not in ['patrol','canary','user'] or not re.fullmatch(r'session-[a-f0-9-]{36}',str(request.get('session_id',''))):raise ValueError('valid native session identity required')
+        if request.get('kind') not in ['patrol','canary','user','automation'] or not re.fullmatch(r'session-[a-f0-9-]{36}',str(request.get('session_id',''))):raise ValueError('valid native session identity required')
         result.update(session_id=request['session_id'],kind=request['kind'])
     if operation in POLICY:
         if not isinstance(request.get('preferences'),dict):raise ValueError('preference patch object required')
@@ -37,6 +76,9 @@ def validate_request(request):
         if operation.startswith('skill_') and 'deadline' in request:
             if not isinstance(request['deadline'],(int,float)):raise ValueError('numeric deadline required')
             result['deadline']=request['deadline']
+        if 'maintenance_session' in request:
+            if not re.fullmatch(r'session-[a-f0-9-]{36}',str(request['maintenance_session'])):raise ValueError('valid maintenance identity required')
+            result['maintenance_session']=request['maintenance_session']
     if operation=='tool_run':
         payload=request.get('request',{})
         if not isinstance(payload,dict):raise ValueError('request must be an object')

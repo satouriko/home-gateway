@@ -18,7 +18,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/net-gateway-agent /etc/net-gateway /var/lib/net-gateway /usr/local/share/net-gateway-agent/skill /var/lib/dsh-login
+ReadWritePaths=/var/lib/net-gateway-agent /etc/net-gateway /var/lib/net-gateway /usr/local/share/net-gateway-agent/skill /var/lib/dsh-login /var/lib/dsh/native-task-identity
 CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
 [Install]
 WantedBy=multi-user.target

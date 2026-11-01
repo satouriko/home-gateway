@@ -1,5 +1,17 @@
 {
   "dependencies": {
-    "@deepseek-ai/dsh": "0.2.1-rc.5"
+    "@deepseek-ai/dsh": "0.2.1-rc.5",
+    "dsh-web-mobile": "3.2.1"
+  },
+  "overrides": {
+    "dsh-web-mobile@3.2.1": {
+      "@deepseek-ai/cordis": "4.0.5",
+      "@deepseek-ai/dsh-client-locale": "0.2.1-rc.5",
+      "@deepseek-ai/dsh-client-ui-layout": "0.2.1-rc.5",
+      "@deepseek-ai/dsh-client-ui-sidebar": "0.2.1-rc.5",
+      "@deepseek-ai/dsh-client-ui-settings": "0.2.1-rc.5",
+      "@deepseek-ai/dsh-session-log-export": "0.2.1-rc.5",
+      "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.5"
+    }
   }
 }

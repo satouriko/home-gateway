@@ -10,7 +10,7 @@ gateway_policy 的 get 查询有效目标；test 用 preferences JSON 补丁验�
 
 ## 费用与调度
 
-实时上下文 maintenance_pricing 返回北京时间的峰谷状态和规则来源。例行日志分析、复盘与改进由外部调度器延后到谷价窗口，并留出任务结束时间；新故障、故障复发和用户聊天不受此延后约束。未知法定节假日保守按普通工作日判断，已核实的日期单独加入定价配置。费用规则在独立配置中，不写死进方法skill。
+实时上下文 maintenance_pricing 返回北京时间的峰谷状态和规则来源。例行日志分析、复盘与改进由原生任务与程序准入延后到谷价窗口，并留出任务结束时间；新故障、故障复发和用户聊天不受此延后约束。未知法定节假日保守按普通工作日判断，已核实的日期单独加入定价配置。费用规则在独立配置中，不写死进方法skill。
 
 ## 巡检分析程序
 
@@ -61,3 +61,11 @@ gateway_audit_plan 可查询或调整审计间隔、常规任务日预算、选�
 实时系统上下文的 source_control 是同步状态来源，包含 repository_url、branch、result、last_attempt_at、last_success_at、local_commit、remote_commit 和 error_code。remote_commit 只表示最近一次成功推送的提交，不表示此后刚发布的内容已经同步。状态不可用或 result=failed 时保持未确认，不能拿本地发布成功代替远端推送成功。同步由受保护程序完成，不读取推送私钥或模型凭据来手工试错。
 
 正式发布或已验收偏好更新会返回 source_control_sync 并自动触发同步，无需维护者手动推送。source_control.pending=true 表示持久发布请求尚未被成功推送确认；acknowledged_request 是成功同步所对应的请求。发布期间的新请求继续排队；失败保留请求并由独立定时器重试，不把 GitHub 的故障变成本地发布失败。
+
+## 原生自动化运行状态
+
+上下文 native_automation 提供任务定义、最近程序准入和最近实际执行的有界摘要；需要详细内容时按需查询。原生独立执行历史区分 pending、started、completed、skipped、failed、interrupted、expired，并显示实际执行会话。只有 headless CLI 确认持久化 turn/end=completed、成功退出且未过期才计入成功审计；服务 active 和定时触发都不代表成功。
+
+同一个原生任务保留身份和编辑记录，每次实际 AI 执行使用新的有界会话。程序检查跳过不进入来源会话，不产生模型调用。任务删除优先于后台自动恢复；gateway_audit_plan(restore) 必须有当前用户明确请求。gateway_audit_plan(set) 修改实际任务时间，不维护覆盖用户编辑的影子时钟。
+
+原生常规复核遵守谷价窗口、至少两小时间隔、每日预算和磁盘预留。相同改进证据去重；新程序版本不继承旧版本成功审计的信心。根进程记录持久化执行身份以避免重启重放重复计费，任务回执有日数和条数上限，独立后台会话按存储预算处理。公开备份只保存任务定义与启用偏好，恢复后按偏好创建任务；已删除任务保持停用。

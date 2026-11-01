@@ -18,3 +18,11 @@
 - id: credentials
   config:
     path: /var/lib/dsh-login/credentials.yaml
+
+- insert:
+    - id: dsh-web-mobile
+      name: dsh-web-mobile
+
+- insert:
+    - id: home-gateway-native-maintenance
+      name: file:///usr/local/share/net-gateway-agent/native-maintenance.mjs

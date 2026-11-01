@@ -1,0 +1,123 @@
+{
+  "format": 1,
+  "patches": [
+    {
+      "package": "@deepseek-ai/dsh-schedule",
+      "version": "0.2.1-rc.5",
+      "file": "schedule-execution.patch",
+      "sha256": "a6bc1a6e2c082086619407e4a66906fc676aac1e78930ebaf184fbd6b848ee07",
+      "licenseSha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "changes": [
+        {
+          "path": "lib/index.js",
+          "upstreamSha256": "022b9f191b6ca0f4b0f26625afc49f375933068a42712c0a75e94e439d7e6d0e",
+          "patchedSha256": "b83a7c0c38673c9d0f5a6a7c22029f873c725857a39516f86c68f08ee304f985"
+        },
+        {
+          "path": "lib/typert.host.js",
+          "upstreamSha256": "d41bfc4d30142f90516e2d2e5338caed1ae75fccbd5e84d869f45f7cd4d2c129",
+          "patchedSha256": "ce15afaae419625aea5b1a4c44cac79fddadcbcb4d2d534758aa2b15cca015a7"
+        },
+        {
+          "path": "lib/typert.remote-client.js",
+          "upstreamSha256": "7a492371d30b3b351d15f0e68d8cdddcb45ba8c7a31f124d356336639d843d81",
+          "patchedSha256": "401b2aeffa88b42da4572b2a5cd8692ee829b4b3fbd57b0425025b09b7b2468c"
+        },
+        {
+          "path": "lib/types/delivery-history.js",
+          "upstreamSha256": "406af6b48f678b9b5040c353ff335bcadb522f6d5b7e2553c2edcfab1a4b3d86",
+          "patchedSha256": "45b5e29e5e0521c5eccc076962c3290905c06e04e6c5f989a3cea1ee6da4c63a"
+        },
+        {
+          "path": "lib/types/domain.js",
+          "upstreamSha256": "f9016233df12ad3577b563b0eb5d19f67ea8b744dc0fb988afaedd374370ee85",
+          "patchedSha256": "714481feb36417a0af3a596e0eaf42d2825a9d22100e5962da339d9a7f787431"
+        },
+        {
+          "path": "lib/types/execution.d.ts",
+          "upstreamSha256": null,
+          "patchedSha256": "f89a0d47691f925e3b1d8cd59451a0981da5806a265c706fee71b3a6e831c7ee"
+        },
+        {
+          "path": "lib/types/execution.js",
+          "upstreamSha256": null,
+          "patchedSha256": "fb578cb827a184ac3eb7a4b6b260754ea106ea6b0d576a43500e7cec28946039"
+        },
+        {
+          "path": "lib/types/index.d.ts",
+          "upstreamSha256": "1f683f0c7a80ae940ab535e212cb81582676568d159dc9b39ff2ccb60dfbe480",
+          "patchedSha256": "df615752d6da112992d99e7dde000f183e923073eb38ec0778cdb909e1a62a13"
+        },
+        {
+          "path": "lib/types/index.js",
+          "upstreamSha256": "7b3bcf3db9b95bf50140fd35517b16dbdbafcacfe34ac23d361993595e801d65",
+          "patchedSha256": "c5bf9e32757d7baf2d5236dce57a434cd2c2b074f51fa5a2c54125e01da955e0"
+        },
+        {
+          "path": "lib/types/runtime.d.ts",
+          "upstreamSha256": "25f881efdb64d997888c5fff6da0485391a7932a98aa7146c992ee88691dc4b7",
+          "patchedSha256": "8c6d0904344cbc15b7c0fa191363e77921411d84bd6b622299fe0e8742063db5"
+        },
+        {
+          "path": "lib/types/runtime.js",
+          "upstreamSha256": "2c89807747ff8451fa588d6b93ae7c6480d84c07fdafc81364ad5204a3e419e3",
+          "patchedSha256": "f7e27ea6272e5613602aaa11a864773660d3c44ff7b8efdfec4534baee5d4115"
+        },
+        {
+          "path": "lib/types/storage.d.ts",
+          "upstreamSha256": "beaae74d1c1487ec2549d37eeec7273ea1ccbc93ef90319d91f422ac1357a379",
+          "patchedSha256": "a186b222c6101bf698b06f42ab9a93bea6c62dec2ff238bea91cf60969fc6307"
+        },
+        {
+          "path": "lib/types/storage.js",
+          "upstreamSha256": "497dd162c6d213aa24aca16edcbb41e6d81c205c3a6a28f5b71efba3337133aa",
+          "patchedSha256": "8212bad5a0d84c57f2f55e5253476c03deccad291ae1c951e2b1db34b762eb76"
+        },
+        {
+          "path": "lib/types/types.d.ts",
+          "upstreamSha256": "83d232cca3b8ca518e25e6a33a8ee75ff5dc24110afe7c194d4258760264ca57",
+          "patchedSha256": "8a4e417a565247fb99ad022630ee45f2e26ecf328812e8ef467b14391f608d43"
+        },
+        {
+          "path": "lib/types/update.js",
+          "upstreamSha256": "2d383810610fcf029e12372110a6f02a95121cfb082e3aa396caace192692fa3",
+          "patchedSha256": "ab527fb2cac2bd5b9b7d7ba7a6dc52a999546e391b4be4ecff6ae8f6fea1b82d"
+        }
+      ]
+    },
+    {
+      "package": "@deepseek-ai/dsh-client-ui-schedule",
+      "version": "0.2.1-rc.5",
+      "file": "schedule-history-ui.patch",
+      "sha256": "347938c5e494b7763ccd865654fca144f3bbd35b4023e61df52990c577f2135f",
+      "licenseSha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "changes": [
+        {
+          "path": "lib/client.js",
+          "upstreamSha256": "46f2cfd0bfc2be7ae2159a6f52f929911e0087b7b48c62de7f31c675fbe0a0a0",
+          "patchedSha256": "535b3b2f267af9edad2d00da4d1f4a8aaa39bad36c5f77af717f9271b70044d6"
+        },
+        {
+          "path": "lib/types/client/DeliveryHistory.d.ts",
+          "upstreamSha256": "13c80294fde961e2aa36fcc01d3d213c8ecc97e307b7e4c132ed0fb7bc5bf343",
+          "patchedSha256": "6c7051e1feda5309aefd217c8a49591f2d216e9a89834f2a9354cde646f59dd1"
+        },
+        {
+          "path": "lib/types/client/TaskDetail.d.ts",
+          "upstreamSha256": "6b60f98aaf89ec962320e30601cf9be667cdc314707af99fc9dc14fe0d2a9934",
+          "patchedSha256": "102567fd308a871ea27de71b1937f14ae9565a9e4739b872cba069576a7d89fb"
+        },
+        {
+          "path": "lib/types/client/locales.d.ts",
+          "upstreamSha256": "5b005f2af7f47597fd411cceaf66222df389f5322fbafb2fa1b8828892e13446",
+          "patchedSha256": "0454da222f82cc653fabf6bb8c6a61d577ee096b75c9c067b6bd008c13050aa0"
+        },
+        {
+          "path": "lib/types/client/task-manager-locales.d.ts",
+          "upstreamSha256": "ef80ee70d53ca697fe3bf7fef77c4bc9a80d63730c26218fb2141fa83c8b200a",
+          "patchedSha256": "69b107ca65b9042e3127c5facb8cdfe9c44b28899a11d9a3edc8800d9d782703"
+        }
+      ]
+    }
+  ]
+}
