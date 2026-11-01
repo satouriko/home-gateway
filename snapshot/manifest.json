@@ -134,7 +134,7 @@
     },
     "runtime/dsh/package.json": {
       "mode": 420,
-      "sha256": "87ce8e834f9985e7bb30078b8962e822cad10d1c44c5422d49b1cb73e9d6ea09"
+      "sha256": "e4a1e45d54a9c48c525889fe8975d86c5e2941a7a9a12c131fa63c4ee3759fc5"
     },
     "snapshot/published/diagnostic-active.json": {
       "mode": 384,
