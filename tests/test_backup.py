@@ -117,7 +117,8 @@ class PublicBackupTests(unittest.TestCase):
         git('-C', repo, 'remote', 'add', 'origin', origin)
         git('-C', repo, 'push', 'origin', 'main')
         status = folder/'sync-status.json'
-        args = [sys.executable, str(Path(__file__).parents[1] / 'backup.py'), '--root', str(self.root), '--repository', str(repo), '--push', '--status-file', str(status)]
+        request = folder/'request.json';request.write_text(json.dumps({'id':'a'*32}))
+        args = [sys.executable, str(Path(__file__).parents[1] / 'backup.py'), '--root', str(self.root), '--repository', str(repo), '--push', '--status-file', str(status), '--request-file', str(request)]
         subprocess.run(args, check=True, capture_output=True)
         deployed = git('--git-dir', origin, 'rev-parse', 'main')
         self.assertNotEqual(initial, deployed)
@@ -125,14 +126,17 @@ class PublicBackupTests(unittest.TestCase):
         self.assertEqual(git('--git-dir', origin, 'rev-parse', 'main'), deployed)
         saved=json.loads(status.read_text())
         self.assertEqual(saved['branch'],'main');self.assertEqual(saved['remote_commit'],deployed)
+        self.assertEqual(saved['acknowledged_request'],'a'*32)
         self.assertEqual(saved['result'],'success')
         git('-C',repo,'remote','set-url','origin',folder/'unreachable.git')
+        request.write_text(json.dumps({'id':'b'*32}))
         failed=subprocess.run(args,capture_output=True)
         self.assertNotEqual(failed.returncode,0)
         rejected=json.loads(status.read_text())
         self.assertEqual(rejected['result'],'failed')
         self.assertEqual(rejected['remote_commit'],deployed)
         self.assertEqual(rejected['last_success_at'],saved['last_success_at'])
+        self.assertEqual(rejected['acknowledged_request'],'a'*32)
 
     def test_remote_source_changes_stop_export_without_overwriting_local_project(self):
         folder = Path(self.temp.name); origin = folder/'remote.git'; local = folder/'local'; other = folder/'other'

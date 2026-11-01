@@ -114,11 +114,11 @@
     },
     "docs/operator/BACKGROUND.md": {
       "mode": 420,
-      "sha256": "555fb674f43af854b696722b445650b99f6374df4c0b10e516f6b087733bb36d"
+      "sha256": "d57914443df02ff0e304bc4dad7f8c695cefc3d6d477297ae07e0749c4f363ba"
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
-      "sha256": "fb170c670c9ca042fae652dd24196d0e323490d14b9f6ae592d5cd953c0446d9"
+      "sha256": "923ec1666768b4ac4c0a27ee028000f70ea47f668da034e1657a40f01f955bcb"
     },
     "preferences/audit-plan.json": {
       "mode": 384,
@@ -190,7 +190,7 @@
     },
     "src/operator/broker.py": {
       "mode": 493,
-      "sha256": "6a6132c3689764577b242c9c6951adab64a5cc9bc4fae308ab409c04a5695630"
+      "sha256": "192bd18ec2b1476a5d5cc3d685923c1191b70a6e4990e9e64679433985181997"
     },
     "src/operator/control_route.py": {
       "mode": 493,

@@ -57,7 +57,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /usr/local/lib/home-gateway-backup/backup.py --repository /var/lib/home-gateway-backup/repository --push --status-file /var/lib/home-gateway-backup/status.json
+ExecStart=/usr/bin/python3 /usr/local/lib/home-gateway-backup/backup.py --repository /var/lib/home-gateway-backup/repository --push --status-file /var/lib/home-gateway-backup/status.json --request-file /var/lib/net-gateway-agent/source-sync-request.json
 Environment="GIT_SSH_COMMAND=/usr/bin/ssh -F /etc/home-gateway-backup/ssh_config"
 Environment=GIT_TERMINAL_PROMPT=0
 TimeoutStartSec=150

@@ -32,6 +32,43 @@ PROGRAM_LOCK = threading.Lock()
 SKILL_LOCK = threading.Lock()
 REQUEST=threading.local()
 REGISTRY_LOCK=threading.Lock()
+SYNC_STATUS=Path('/var/lib/home-gateway-backup/status.json')
+SYNC_REQUEST_LOCK=threading.Lock()
+SYNC_START_LOCK=threading.Lock()
+SYNC_EVENT=threading.Event()
+SYNC_THREAD=None
+
+def source_sync_pending(status_path=None):
+    try:
+        request=json.loads((STATE/'source-sync-request.json').read_text())
+        if not request.get('id'):return False
+    except (OSError,ValueError,AttributeError):return False
+    try:status=json.loads((status_path or SYNC_STATUS).read_text())
+    except (OSError,ValueError):status={}
+    return not isinstance(status,dict) or status.get('acknowledged_request')!=request['id']
+
+def dispatch_source_sync_once():
+    try:command('systemctl','start','home-gateway-backup.service',timeout=165)
+    except Exception:return False  # Leave the durable request for the independent retry timer.
+    # A publication may arrive while an already-running push is finishing.
+    return source_sync_pending()
+
+def start_sync_dispatcher():
+    global SYNC_THREAD
+    with SYNC_START_LOCK:
+        if SYNC_THREAD is not None and SYNC_THREAD.is_alive():return
+        def worker():
+            while True:
+                SYNC_EVENT.wait();SYNC_EVENT.clear()
+                if source_sync_pending() and dispatch_source_sync_once():SYNC_EVENT.set()
+        SYNC_THREAD=threading.Thread(target=worker,name='published-source-sync',daemon=True)
+        SYNC_THREAD.start()
+
+def queue_source_sync(reason):
+    with SYNC_REQUEST_LOCK:
+        write_state(STATE/'source-sync-request.json',{'id':uuid.uuid4().hex,'reason':reason,'requested_at':time.time()})
+    start_sync_dispatcher();SYNC_EVENT.set()
+    return {'requested':True,'pending':True}
 
 def acquire_transaction():
     if not LOCK.acquire(blocking=False):raise ValueError('another configuration operation is running')
@@ -133,14 +170,14 @@ def policy_action(operation, patch, receipt=None):
         temporary.unlink(missing_ok=True);release_transaction(transaction)
 
 def source_control_status(path=None):
-    path=path or Path('/var/lib/home-gateway-backup/status.json')
+    path=path or SYNC_STATUS
     try:
         value=json.loads(path.read_text())
         if not isinstance(value,dict):return {'available':False}
         keys=['repository_url','branch','expected_branch','result','last_attempt_at','last_success_at',
-              'local_commit','remote_commit','verification','error_code']
-        return {'available':True,**{key:value[key] for key in keys if key in value}}
-    except (OSError,ValueError):return {'available':False}
+              'local_commit','remote_commit','verification','error_code','acknowledged_request']
+        return {'available':True,'pending':source_sync_pending(path),**{key:value[key] for key in keys if key in value}}
+    except (OSError,ValueError):return {'available':False,'pending':source_sync_pending(path)}
 
 def context():
     import hashlib
@@ -305,7 +342,7 @@ def repair(operation):
         raise
     finally:release_transaction(transaction)
 
-def handle(request):
+def dispatch(request):
     data=validate_request(request);op=data['operation']
     if op=='status':return status()
     if op=='audit_plan':return audit_plan()
@@ -347,6 +384,16 @@ def handle(request):
         try:return action(op,data.get('source'),data.get('deadline'),getattr(REQUEST,'cancelled',None))
         finally:SKILL_LOCK.release()
     return repair(op)
+
+def handle(request):
+    result=dispatch(request);op=request.get('operation')
+    published=(op in ['program_publish','tool_publish','skill_publish'] and result.get('deployed') is True)
+    published=published or op=='audit_plan_set' or (op=='policy_apply' and result.get('verified_healthy') is True and result.get('rollback_armed') is False)
+    if published:
+        try:sync=queue_source_sync(op)
+        except Exception:sync={'requested':False,'retry':'independent timer'}
+        result={**result,'source_control_sync':sync}
+    return result
 
 def envelope(request):
     try:return {'ok':True,'result':handle(request)}

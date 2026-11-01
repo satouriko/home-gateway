@@ -268,7 +268,7 @@ def prepare_sync(repository):
     git(repository, 'merge', '--ff-only', remote)
 
 
-def sync_status(path, repository, error=None):
+def sync_status(path, repository, error=None, request_id=None):
     if path is None: return
     previous = {}
     if path.exists():
@@ -276,7 +276,7 @@ def sync_status(path, repository, error=None):
         except ValueError: pass
     if not isinstance(previous, dict): previous = {}
     now = time.time()
-    status = {key: previous[key] for key in ['last_success_at', 'remote_commit'] if key in previous}
+    status = {key: previous[key] for key in ['last_success_at', 'remote_commit', 'acknowledged_request'] if key in previous}
     remote = git(repository, 'remote', 'get-url', 'origin').stdout.strip()
     match = re.fullmatch(r'(?:git@github\.com:|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?', remote)
     status.update(repository_url='https://github.com/' + match.group(1) if match else None,
@@ -285,7 +285,9 @@ def sync_status(path, repository, error=None):
                   local_commit=git(repository, 'rev-parse', 'HEAD').stdout.strip(),
                   verification='last successful Git push',
                   error_code=str(error) if isinstance(error, SyncError) else type(error).__name__ if error else None)
-    if error is None: status.update(last_success_at=now, remote_commit=status['local_commit'])
+    if error is None:
+        status.update(last_success_at=now, remote_commit=status['local_commit'])
+        if request_id is not None: status['acknowledged_request']=request_id
     temporary = path.with_suffix('.next')
     temporary.write_bytes(encoded(status)); temporary.chmod(0o600); temporary.replace(path)
 
@@ -318,12 +320,20 @@ def main():
     parser.add_argument('--repository', type=Path, required=True)
     parser.add_argument('--push', action='store_true')
     parser.add_argument('--status-file', type=Path)
+    parser.add_argument('--request-file', type=Path)
     args = parser.parse_args()
-    try: execute(args)
+    request_id=None
+    try:
+        if args.request_file is not None and args.request_file.exists():
+            request=json.loads(args.request_file.read_text())
+            request_id=request.get('id') if isinstance(request,dict) else None
+            if not isinstance(request_id,str) or not re.fullmatch(r'[a-f0-9]{32}',request_id):
+                raise SyncError('invalid_publication_request')
+        execute(args)
     except Exception as error:
         if args.push: sync_status(args.status_file, args.repository, error)
         raise
-    if args.push: sync_status(args.status_file, args.repository)
+    if args.push: sync_status(args.status_file, args.repository, request_id=request_id)
 
 
 if __name__ == '__main__':

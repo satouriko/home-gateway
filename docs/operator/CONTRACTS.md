@@ -59,3 +59,5 @@ gateway_audit_plan 可查询或调整审计间隔、常规任务日预算、选�
 ## 程序与偏好同步
 
 实时系统上下文的 source_control 是同步状态来源，包含 repository_url、branch、result、last_attempt_at、last_success_at、local_commit、remote_commit 和 error_code。remote_commit 只表示最近一次成功推送的提交，不表示此后刚发布的内容已经同步。状态不可用或 result=failed 时保持未确认，不能拿本地发布成功代替远端推送成功。同步由受保护程序完成，不读取推送私钥或模型凭据来手工试错。
+
+正式发布或已验收偏好更新会返回 source_control_sync 并自动触发同步，无需维护者手动推送。source_control.pending=true 表示持久发布请求尚未被成功推送确认；acknowledged_request 是成功同步所对应的请求。发布期间的新请求继续排队；失败保留请求并由独立定时器重试，不把 GitHub 的故障变成本地发布失败。

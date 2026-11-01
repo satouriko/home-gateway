@@ -18,6 +18,51 @@ def healthy_result():
       'proxy_https':{'ok':True,'result':{'http_status':204,'expected_health_status':True}}}}
 
 class RecoveryTests(unittest.TestCase):
+    def test_successful_local_publications_request_sync_but_tests_and_unverified_policy_do_not(self):
+        for operation,result,expected in [
+            ('program_publish',{'deployed':True},True),('tool_publish',{'deployed':True},True),
+            ('skill_publish',{'deployed':True},True),('audit_plan_set',{'interval_hours':4},True),
+            ('policy_apply',{'verified_healthy':True,'rollback_armed':False},True),
+            ('policy_apply',{'verified_healthy':False,'rollback_armed':True},False),
+            ('program_test',{'deployed':False},False),('tool_test',{'deployed':False},False),
+            ('skill_test',{'deployed':False},False),('policy_test',{'tested':True},False)]:
+            with self.subTest(operation=operation,result=result),patch.object(broker,'dispatch',return_value=result),patch.object(broker,'queue_source_sync',return_value={'requested':True}) as queue:
+                returned=broker.handle({'operation':operation})
+                self.assertEqual(queue.called,expected)
+                if expected:self.assertTrue(returned['source_control_sync']['requested'])
+        with patch.object(broker,'dispatch',side_effect=ValueError('publication failed')),patch.object(broker,'queue_source_sync') as queue:
+            with self.assertRaises(ValueError):broker.handle({'operation':'program_publish'})
+            queue.assert_not_called()
+
+    def test_sync_dispatch_failure_cannot_undo_a_successful_local_publication(self):
+        with patch.object(broker,'dispatch',return_value={'deployed':True,'version':'published'}),patch.object(broker,'queue_source_sync',side_effect=OSError):
+            result=broker.handle({'operation':'program_publish'})
+            self.assertTrue(result['deployed']);self.assertFalse(result['source_control_sync']['requested'])
+
+    def test_publish_queue_is_durable_and_detects_a_second_publication_during_push(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)),patch.object(broker,'SYNC_STATUS',Path(folder)/'status.json'),patch.object(broker,'start_sync_dispatcher'):
+            broker.queue_source_sync('program_publish')
+            request=json.loads((Path(folder)/'source-sync-request.json').read_text())
+            self.assertTrue(broker.source_sync_pending())
+            def first_push(*args,**kwargs):
+                broker.queue_source_sync('skill_publish')
+                (Path(folder)/'status.json').write_text(json.dumps({'acknowledged_request':request['id']}))
+            with patch.object(broker,'command',side_effect=first_push):
+                self.assertTrue(broker.dispatch_source_sync_once())
+            latest=json.loads((Path(folder)/'source-sync-request.json').read_text())
+            def second_push(*args,**kwargs):
+                (Path(folder)/'status.json').write_text(json.dumps({'acknowledged_request':latest['id']}))
+            with patch.object(broker,'command',side_effect=second_push):
+                self.assertFalse(broker.dispatch_source_sync_once())
+            self.assertFalse(broker.source_sync_pending())
+
+    def test_failed_push_leaves_pending_request_without_a_busy_retry_loop(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)),patch.object(broker,'SYNC_STATUS',Path(folder)/'status.json'),patch.object(broker,'start_sync_dispatcher'):
+            broker.queue_source_sync('tool_publish')
+            with patch.object(broker,'command',side_effect=OSError):
+                self.assertFalse(broker.dispatch_source_sync_once())
+            self.assertTrue(broker.source_sync_pending())
+
     def test_source_control_context_is_current_and_excludes_private_fields(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'status.json'
