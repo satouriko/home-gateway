@@ -1,10 +1,12 @@
 # 保守巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
 # 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康。
-# v3：修复“外部零字节端点”判定的数据来源缺陷。评估快照不含 observations，
-# 旧逻辑永远取不到客户端字节，导致同一端点每轮重复 review_request。
-# 现在只依赖评估时确实存在的 history/tracked_probes/business_observations：
-# 固定路径健康、探测目标持续失败、且客户端同一故障在多轮历史中反复出现时，
-# 判定为端点级外部问题，保留记录但不再重复升级；新鲜故障仍立即升级。
+# v4：修复“持续客户端端点”反复探测导致的升级循环。评估快照在探测之前生成，
+# 因此 checks 里没有 target:<domain>、也没有 tracked_probes；旧版靠 probe_failed
+# 判定外部端点永远是 False。缓存过期后程序又请求 probe，而不可解析/不可探测的
+# 端点会让 patrol 记录一次 target: 故障，故障指纹翻转，于是下一轮又紧急调用 AI。
+# 现在：固定路径健康且同一客户端故障在多轮历史中持续出现时，停止重复请求探测
+# （真实客户端的双路径证据仍由 business_watch 独立采集），并保留稳定指纹的
+# review_request，明确标注“未验证为用户业务恢复”，不把未解决说成已恢复。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -116,15 +118,11 @@ def inspect(snapshot):
     if sustained == 1:
         parts = parts + ['时延仅作路径证据，不代表吞吐上限']
 
-    tracked_probes = snapshot.get('tracked_probes', {})
     dial_only = []
     actionable = []
+    probe_capped = []
     for issue in issues:
         domain = issue.get('domain')
-        tracked = checks.get('target:' + domain, {})
-        if len(tracked) == 0:
-            tracked = tracked_probes.get(domain, {})
-        probe_failed = tracked.get('ok') is False or tracked.get('error') is not None
         paths = business_checks.get(domain, {}).get('result', {}).get('paths', {})
         direct = paths.get('direct', {})
         proxy_path = paths.get('proxy', {})
@@ -140,20 +138,19 @@ def inspect(snapshot):
                 faults = entry.get('faults', [])
             if 'client_business:' + domain in faults:
                 recent_faults = recent_faults + 1
-        external = dual_fail
-        persistent_external = (
-            stable_fixed_paths and probe_failed and recent_faults >= 8
-        )
-        if not external and persistent_external:
-            external = True
-        if external:
+        if dual_fail:
             dial_only = dial_only + [domain]
         else:
             actionable = actionable + [domain]
+            if recent_faults >= 8 and stable_fixed_paths:
+                probe_capped = probe_capped + [domain]
 
     if len(dial_only) > 0:
-        parts = parts + ['固定检查正常但同一客户端端点持续多轮失败且定向探测不可用，按外部端点问题保留记录，不再重复升级；未验证为用户业务恢复']
-    targets = [item for item in real_targets if item not in dial_only]
+        parts = parts + ['固定检查正常但同一客户端端点验证失败且指向端点问题，保留记录但不重复升级；未验证为用户业务恢复']
+    if len(probe_capped) > 0:
+        parts = parts + ['同一客户端端点连续多轮失败，已停止重复探测以避免同一错误反复升级；问题仍未解决，也未验证为用户业务恢复']
+
+    targets = [item for item in real_targets if item not in dial_only and item not in probe_capped]
 
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
