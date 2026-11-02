@@ -1,3 +1,9 @@
+# v6：国内与代理同时失败时不再一律 action=none。2026-11-03 05:36:23-05:38:08 实测：
+# 全部 12 个美国节点 delay=0、三次选路尝试全部失败（US x2 + OTHER x1），受保护代理
+# HTTPS 失败，国内检查 7582ms 才成功，recheck 后 105 秒恢复 US_AUTO。旧分支把它当
+# “出口/解析层问题”而不动作，漏掉了节点池事件。改为读取 node_observations 的选路尝试
+# 记录：首选池失败且存在失败尝试时建议有界 recheck_nodes，并明确出口层未排除。
+# 注意：本程序源码受 AST 白名单限制，只能用 len/list 等允许的函数，不能用 isinstance。
 # 保守巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
 # 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康。
 # v5：修正“偏好池全部 alive=false 就建议刷新订阅”的误动作。实测该标记会整体失真：
@@ -90,6 +96,20 @@ def inspect(snapshot):
         and not service_bad and not dns_cn_bad and not dns_foreign_bad
     )
 
+    # 快照中的 node_observations 由网关自身校验后写入；程序白名单不允许 isinstance，
+    # 这里用真值判断与 .get 访问。
+    node_obs = snapshot.get('node_observations', {})
+    node_events = node_obs.get('events', []) if node_obs else []
+    node_events = node_events if node_events else []
+    last_node_event = node_events[-1] if len(node_events) > 0 else {}
+    pool_selection_failed = (
+        last_node_event.get('preferred_failed') is True or last_node_event.get('unavailable') is True
+    )
+    us_attempts_failed = 0
+    for row in last_node_event.get('attempts', []):
+        if row.get('region') == 'US_AUTO' and row.get('ok') is False:
+            us_attempts_failed = us_attempts_failed + 1
+
     if not proxy_present or not mainland_present:
         parts = parts + ['检查数据缺失，不据此判断路径健康']
     elif service_bad:
@@ -98,6 +118,9 @@ def inspect(snapshot):
         action = 'recheck_nodes'
         probes = real_targets
         parts = parts + ['代理路径失败而国内直连正常，建议重新检测节点']
+    elif proxy_bad and mainland_bad and pool_selection_failed and us_attempts_failed >= 1:
+        action = 'recheck_nodes'
+        parts = parts + ['国内与代理同时失败，但节点池选路记录显示首选美国池连续失败，先做有界节点复检；出口层仍未排除']
     elif proxy_bad and mainland_bad:
         probes = real_targets
         parts = parts + ['国内与代理同时失败，更像出口或解析层问题，不宜仅换节点']
