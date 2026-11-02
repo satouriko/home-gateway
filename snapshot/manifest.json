@@ -122,7 +122,7 @@
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
-      "sha256": "ec2d25a443a5d56369afec3bb5fbf9d0a005612513553a78de7eb8404e44ab1e"
+      "sha256": "4171cfa3b3125f41f25f8e52d9909ddc2fcb053a24afd2eb59e4df703178b87d"
     },
     "preferences/audit-plan.json": {
       "mode": 384,
@@ -246,7 +246,7 @@
     },
     "src/operator/ai_job.py": {
       "mode": 420,
-      "sha256": "c25959507cff5041b2e0a0454a2f4332dab67e15d035d9013f256bc3e1bd47bc"
+      "sha256": "de9161e77893535d846449e7713366c15b7fc1e5b92a574f0ad4cd08878c83e3"
     },
     "src/operator/bounded.py": {
       "mode": 493,
