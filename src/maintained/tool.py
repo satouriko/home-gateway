@@ -42,6 +42,11 @@ MAX_ADDRESSES = 3
 # Mirrors the protected probe transport's own bound: more answers than this and
 # the probe refuses the target before any packet is sent.
 PROBE_ANSWER_CAP = 16
+# A sub-5 ms TCP connect to a public unicast address cannot be the real endpoint:
+# something local answers the SYN.  Observed 2026-11-03 on a dead CDN domain
+# (0.3-0.4 ms connects, every TLS handshake timing out), so a fast connect alone
+# must not be reported as reachability.
+IMPLAUSIBLE_CONNECT_MS = 5.0
 ALLOWED_PORTS = (443,)
 DEFAULT_DOMAINS = ["www.baidu.com"]
 _NAME = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
@@ -120,15 +125,28 @@ def _handshake(address, domain, port):
 
 
 def _summarize(resolution, picked, samples):
-    """Turn the raw facts into one stable verdict plus an explicit cause."""
+    """Turn the raw facts into one stable verdict plus an explicit cause.
+
+    TCP connect success is not enough: a local SYN answer looks identical to a
+    reachable endpoint in a few tenths of a millisecond.  Only a completed TLS
+    handshake (the transport the probe and clients actually need) is treated
+    as reachability; a fast connect with no handshake is named as suspected
+    interception instead of a passing path.
+    """
     if resolution.get("dns_state") == "unresolved":
         return "dns_unresolved"
     if resolution.get("dns_state") == "empty" or not picked:
         return "no_public_address"
     if not samples:
         return "not_measured"
-    if any(item.get("tcp_ok") for item in samples):
-        return "tcp_reachable"
+    if any(item.get("tls_ok") for item in samples):
+        return "tls_reachable"
+    connects = [item for item in samples if item.get("tcp_ok")]
+    if connects:
+        fastest = min(item["tcp_ms"] for item in connects if isinstance(item.get("tcp_ms"), float))
+        if fastest < IMPLAUSIBLE_CONNECT_MS:
+            return "connect_intercepted_no_tls"
+        return "tcp_only_no_tls"
     return "endpoint_unreachable_from_control_path"
 
 
@@ -169,8 +187,12 @@ def inspect_endpoint(request):
             note = "name does not resolve here; the protected probe cannot measure it either"
         elif verdict == "no_public_address":
             note = "no global unicast address to test; probe input would be rejected"
-        elif verdict == "tcp_reachable":
-            note = "transport reaches the endpoint from the control path; application answers are separate evidence"
+        elif verdict == "tls_reachable":
+            note = "TLS handshake completed from the control path; application answers are separate evidence"
+        elif verdict == "connect_intercepted_no_tls":
+            note = "TCP connects in well under a millisecond but no TLS handshake completes; a local SYN answer is likely, so the endpoint is not proven reachable"
+        elif verdict == "tcp_only_no_tls":
+            note = "TCP connects but no TLS handshake completes; endpoint reachability is not proven"
         elif verdict == "endpoint_unreachable_from_control_path":
             note = "no handshake from this WAN egress; says nothing about other networks or the proxy path"
         else:
@@ -234,9 +256,15 @@ def self_test():
     check("verdict_unreachable",
           _summarize({"dns_state": "resolved"}, ["1.1.1.1"],
                      [{"tcp_ok": False}, {"tcp_ok": False}]) == "endpoint_unreachable_from_control_path")
-    check("verdict_reachable",
+    check("verdict_tls_reachable",
           _summarize({"dns_state": "resolved"}, ["1.1.1.1"],
-                     [{"tcp_ok": False}, {"tcp_ok": True}]) == "tcp_reachable")
+                     [{"tcp_ok": False}, {"tcp_ok": True, "tls_ok": True}]) == "tls_reachable")
+    check("verdict_fast_connect_is_not_reachability",
+          _summarize({"dns_state": "resolved"}, ["1.1.1.1"],
+                     [{"tcp_ok": True, "tcp_ms": 0.3, "tls_ok": False}]) == "connect_intercepted_no_tls")
+    check("verdict_plausible_tcp_without_tls",
+          _summarize({"dns_state": "resolved"}, ["1.1.1.1"],
+                     [{"tcp_ok": True, "tcp_ms": 40.0, "tls_ok": False}]) == "tcp_only_no_tls")
     check("verdict_not_measured",
           _summarize({"dns_state": "resolved"}, ["1.1.1.1"], []) == "not_measured")
 
