@@ -350,7 +350,7 @@
     },
     "tests/maintained/test_program_candidate5.py": {
       "mode": 384,
-      "sha256": "894d2ccda4f49acd42e6d1253801690cb481d53a18589e77af1e825baee843a3"
+      "sha256": "bb59f4d2cff2eb84b5445f360c57da6f9db7fb8f2f2c5c7998bb544e0d2a9760"
     },
     "tests/maintained/test_program_worker.py": {
       "mode": 384,

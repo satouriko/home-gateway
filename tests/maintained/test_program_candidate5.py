@@ -2,8 +2,10 @@
 import importlib.util
 import sys
 
-PATH = '/var/lib/dsh/workspace/network-maintainer/programs/patrol_inspect_candidate5.py'
-spec = importlib.util.spec_from_file_location('cand5', PATH)
+# 回归断言针对工作区“当前程序” patrol_inspect.py（与已发布版本 v8a0cd1d5b1578893 一致）。
+# 此前该文件停留在旧版、测试却指向候选文件，导致复核读到过期逻辑；2026-11-02 复核已同步。
+PATH = '/var/lib/dsh/workspace/network-maintainer/programs/patrol_inspect.py'
+spec = importlib.util.spec_from_file_location('patrol_current', PATH)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
