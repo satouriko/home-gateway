@@ -1,9 +1,9 @@
 {
-  "daily_budget": 6,
+  "daily_budget": 4,
   "enabled": true,
-  "interval_hours": 4.0,
+  "interval_hours": 6,
   "schedule": {
-    "everySeconds": 14400,
+    "everySeconds": 21600,
     "execution": {
       "executor": "home-network",
       "kind": "external"
