@@ -1,3 +1,10 @@
+# v11：停止“根路径应用层拒绝”端点的重复探测与复核循环。2026-11-03 11:15 实测
+# amp-api-edge.apps.apple.com：真实客户端出现 14 次 timeout，但受保护对照直连/代理各 3/3
+# 传输成功且根路径稳定返回 404（该 API 根路径本就无内容）。旧版把它列为 actionable，
+# 每轮都发 review_request，但重复探测只会得到同一个 404，不能获得新证据。v11 在固定路径
+# 健康、同一域名已连续 >=2 轮出现、且直连与代理都“传输可达 + 根路径 4xx”时，标记为
+# 应用层拒绝：保留未解决问题记录，不重复探测、不重复请求复核；明确这不等于应用可用。
+# 同时修正 probe_capped 仍发 review_request 的不一致（文字称已停止升级，实际仍在升级）。
 # v10：补齐 bootstrap_dns_api（经上游 192.168.2.1 解析 api.deepseek.com，控制路径引导 DNS）
 # 的检查。v9 及更早版本在该项 TimeoutError 时仍输出“固定国内与代理健康检查通过”，
 # 与本轮观测（bootstrap 失败、国内/代理正常）矛盾，属于同类“部分检查被当作全部通过”的误判。
@@ -173,6 +180,7 @@ def inspect(snapshot):
     actionable = []
     probe_capped = []
     unprobeable = []
+    app_rejected = []
     for issue in issues:
         domain = issue.get('domain')
         paths = business_checks.get(domain, {}).get('result', {}).get('paths', {})
@@ -183,6 +191,20 @@ def inspect(snapshot):
         direct_reach = direct.get('transport_ok') is True or (direct.get('passed_samples') or 0) >= 1
         proxy_reach = proxy_path.get('transport_ok') is True or (proxy_path.get('passed_samples') or 0) >= 1
         dual_fail = direct_fail and proxy_fail and not (direct_reach or proxy_reach)
+        direct_status = direct.get('http_status')
+        proxy_status = proxy_path.get('http_status')
+        direct_rejected = (
+            direct_status == 400 or direct_status == 401
+            or direct_status == 403 or direct_status == 404
+        )
+        proxy_rejected = (
+            proxy_status == 400 or proxy_status == 401
+            or proxy_status == 403 or proxy_status == 404
+        )
+        root_rejected = (
+            direct.get('transport_ok') is True and proxy_path.get('transport_ok') is True
+            and direct_rejected and proxy_rejected
+        )
         probe_error = probe_errors.get(domain, '')
         unprobe = probe_error == 'ValueError' or probe_error == 'gaierror'
         recent_faults = 0
@@ -200,6 +222,8 @@ def inspect(snapshot):
             actionable = actionable + [domain]
             if recent_faults >= 8 and stable_fixed_paths:
                 probe_capped = probe_capped + [domain]
+            elif root_rejected and recent_faults >= 2 and stable_fixed_paths:
+                app_rejected = app_rejected + [domain]
 
     if len(dial_only) > 0:
         parts = parts + ['固定检查正常但同一客户端端点验证失败且指向端点问题，保留记录但不重复升级；未验证为用户业务恢复']
@@ -207,21 +231,29 @@ def inspect(snapshot):
         parts = parts + ['客户端引用的域名没有可用的公共解析地址（受保护探测无法完成），保留记录且不重复探测；不是代理或分流故障，实际应用影响仍未验证']
     if len(probe_capped) > 0:
         parts = parts + ['同一客户端端点连续多轮失败，已停止重复探测以避免同一错误反复升级；问题仍未解决，也未验证为用户业务恢复']
+    if len(app_rejected) > 0:
+        parts = parts + ['端点根路径返回 HTTP 4xx（应用层拒绝）且直连/代理传输均可达，保留问题记录并停止重复探测与复核；这不证明应用层可用，实际业务影响仍未验证']
 
     targets = [
         item for item in real_targets
-        if item not in dial_only and item not in probe_capped and item not in unprobeable
+        if item not in dial_only and item not in probe_capped
+        and item not in unprobeable and item not in app_rejected
     ]
 
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
         summary = summary + '；' + part
 
-    if len(issues) > 0 and len(actionable) == 0:
+    reviewable = [
+        domain for domain in actionable
+        if domain not in probe_capped and domain not in app_rejected
+    ]
+
+    if len(issues) > 0 and len(reviewable) == 0:
         return {'summary': summary, 'action': action, 'probe_domains': targets}
     if len(issues) > 0:
         first = issues[0]
-        matching = [issue for issue in issues if issue.get('domain') in actionable]
+        matching = [issue for issue in issues if issue.get('domain') in reviewable]
         if len(matching) > 0:
             first = matching[0]
         return {'summary': summary + '；实际客户端问题尚未解决', 'action': action, 'probe_domains': targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
