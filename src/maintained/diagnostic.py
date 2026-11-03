@@ -122,6 +122,11 @@ def inspect(snapshot):
     elif proxy_bad and mainland_bad:
         probes = real_targets
         parts = parts + ['国内与代理同时失败，更像出口或解析层问题，不宜仅换节点']
+    elif mainland_bad:
+        # v9：旧逻辑只在代理失败时分支，国内直连失败而代理正常会落入 else，
+        # 错误输出“固定国内与代理健康检查通过”。mainland_direct=true 时这是
+        # 用户直连路径退化，必须明确指出，且换节点不能修复直连。
+        parts = parts + ['国内直连检查失败而代理正常，问题在直连或解析层，不建议仅换节点']
     elif sustained == 1:
         action = 'recheck_nodes'
         probes = real_targets
