@@ -1,12 +1,8 @@
-# 主动巡检分析（v13）：已安排且未过期的节点复检期间，不重复发客户端复核请求，
-# 与摘要“等待复检完成后再判断”一致；复检过期或未安排时仍按原规则复核。
-# v12：健康时 action=none；代理失败建议 recheck_nodes；
-# 记录节点池健康探测与固定代理检查的矛盾（更可能是测速/健康URL假阴性，不重复换节点）；
-# 记录客户端观测时效（超过一小时无新连接时，业务结论不代表当前路径）；
-# 未知/不可解析端点保留记录但不重复探测，避免“探测-失败-再探测”循环。
-# v11 起：根路径稳定 4xx 且双路径传输可达的端点归为应用层拒绝，不重复复核。
-# v8 起：NXDOMAIN/无公共地址域名只保留记录、不再请求探测。
-# 本程序只读快照，不触发测速，不改变用户分流目标。
+# 主动巡检（v14）：action=recheck_nodes 已确定时不再附带 review_request/probe_domains，
+# 避免一次代理检查失败既安排节点复检又重复复核已知端点（pending 在程序运行后才创建）。
+# 另用 business_observations.checks 时间判断路径样本过期；生产快照不含 observations，
+# 旧时效分支已移除。v13 防重复复核、v12 矛盾提示、v11 应用层拒绝、v8 不重复探测不变。
+# 只读快照，不触发测速，不改变用户分流目标。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -93,7 +89,6 @@ def inspect(snapshot):
 
     node_obs = snapshot.get('node_observations', {})
     node_events = node_obs.get('events', []) if node_obs else []
-    node_events = node_events if node_events else []
     last_node_event = node_events[-1] if len(node_events) > 0 else {}
     pool_selection_failed = (
         last_node_event.get('preferred_failed') is True or last_node_event.get('unavailable') is True
@@ -191,14 +186,8 @@ def inspect(snapshot):
         dual_fail = direct_fail and proxy_fail and not (direct_reach or proxy_reach)
         direct_status = direct.get('http_status')
         proxy_status = proxy_path.get('http_status')
-        direct_rejected = (
-            direct_status == 400 or direct_status == 401
-            or direct_status == 403 or direct_status == 404
-        )
-        proxy_rejected = (
-            proxy_status == 400 or proxy_status == 401
-            or proxy_status == 403 or proxy_status == 404
-        )
+        direct_rejected = direct_status in (400, 401, 403, 404)
+        proxy_rejected = proxy_status in (400, 401, 403, 404)
         root_rejected = (
             direct.get('transport_ok') is True and proxy_path.get('transport_ok') is True
             and direct_rejected and proxy_rejected
@@ -232,18 +221,22 @@ def inspect(snapshot):
     if len(app_rejected) > 0:
         parts = parts + ['端点根路径返回 HTTP 4xx（应用层拒绝）且直连/代理传输均可达，保留问题记录并停止重复探测与复核；这不证明应用层可用，实际业务影响仍未验证']
 
-    observations = snapshot.get('observations', {})
-    obs_domains = observations.get('domains', []) if observations else []
-    newest_seen = 0
-    for row in obs_domains:
-        seen = row.get('last_seen', 0)
-        if seen is not None and seen > newest_seen:
-            newest_seen = seen
-    stale_clients = False
-    if newest_seen > 0 and now_ts > newest_seen and (now_ts - newest_seen) >= 3600:
-        stale_clients = True
-    if stale_clients:
-        parts = parts + ['客户端观测超过一小时没有新连接（设备可能空闲或采样缺口），业务结论基于旧数据，不代表当前用户路径']
+    # 生产快照不含 observations（patrol 只传 diagnosis+history+quality_summary），
+    # 客户端活动时效仍需受保护层补充；这里只用快照内真实可得的时间戳判断样本时效。
+    newest_business_ts = 0
+    for domain in business_checks:
+        entry = business_checks.get(domain, {})
+        result = entry.get('result', {})
+        stamps = [entry.get('at'), result.get('checked_at'), result.get('observed_at')]
+        for stamp in stamps:
+            if stamp is not None and stamp > newest_business_ts:
+                newest_business_ts = stamp
+    business_stale = False
+    if newest_business_ts > 0 and now_ts > newest_business_ts and (now_ts - newest_business_ts) >= 7200:
+        business_stale = True
+    if business_stale and len(issues) > 0:
+        hours = (now_ts - newest_business_ts) // 3600
+        parts = parts + ['路径对照样本约%d小时前采集，直连/代理比较不代表当前时刻；固定检查与真实客户端流量优先' % hours]
     if pending:
         parts = parts + ['系统已安排节点复检，等待其完成后按新证据判断']
 
@@ -262,6 +255,11 @@ def inspect(snapshot):
         if domain not in probe_capped and domain not in app_rejected
     ]
 
+    if action == 'recheck_nodes':
+        note = ''
+        if len(issues) > 0 and not pending_recheck:
+            note = '；节点复检已确定，客户端端点复核留待固定路径恢复后'
+        return {'summary': summary + note, 'action': action, 'probe_domains': []}
     if len(issues) > 0 and len(reviewable) == 0:
         return {'summary': summary, 'action': action, 'probe_domains': targets}
     if len(issues) > 0 and len(reviewable) > 0 and pending_recheck:
