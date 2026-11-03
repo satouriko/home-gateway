@@ -1,20 +1,18 @@
-# v6：国内与代理同时失败时不再一律 action=none。2026-11-03 05:36:23-05:38:08 实测：
-# 全部 12 个美国节点 delay=0、三次选路尝试全部失败（US x2 + OTHER x1），受保护代理
-# HTTPS 失败，国内检查 7582ms 才成功，recheck 后 105 秒恢复 US_AUTO。旧分支把它当
-# “出口/解析层问题”而不动作，漏掉了节点池事件。改为读取 node_observations 的选路尝试
-# 记录：首选池失败且存在失败尝试时建议有界 recheck_nodes，并明确出口层未排除。
-# 注意：本程序源码受 AST 白名单限制，只能用 len/list 等允许的函数，不能用 isinstance。
+# v7：修复“不可探测域名”导致的反复升级循环。2026-11-03 09:2x 实测：客户端反复对
+# a.v.smtcdns.com 报 DNS 失败（never connected）。网关原样查询该名返回 rcode=3（NXDOMAIN），
+# 受保护 probe 因“无公共 IPv4 应答”抛 ValueError；旧版把它当作可探测端点，下一轮又请求
+# 同一目标，形成“探测-失败-再探测”的循环，且把已知外部死端点持续升级为 anomaly。
+# 本版把 target:<domain> 检查中 ValueError/gaierror 的域名标为“不可探测”：保留问题记录、
+# 不重复请求探测、避免重复 review；文字明确这是客户端引用的无解析地址，不是代理/分流故障，
+# 应用层影响仍未验证。另对无任何合成检查、连续 >=8 轮失败且固定路径健康的端点同样停止升级。
+# 注意：本程序源码受 AST 白名单限制，只能用 len/list 等允许的函数，不能用 isinstance、
+# 字符串 startswith 或 f-string（Attribute 仅允许字典方法）。
 # 保守巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
 # 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康。
-# v5：修正“偏好池全部 alive=false 就建议刷新订阅”的误动作。实测该标记会整体失真：
-# 2026-11-02 05:32-05:33 全部 12 个美国节点 alive=false（delay 0），而同一时段受保护
-# probe_compare 经该池节点代理成功（baidu 200、3/3 样本）、真实客户端也有代理流量。
-# 该分支只在固定国内+代理检查都通过时才会到达，此时“全部节点不可用”与实测矛盾，
-# 刷新订阅属于多余风险动作。改为仅记录“节点测速结果不可信、不作为动作依据”，
-# 仍保留真实的代理失败分支（recheck_nodes）与持续时延分支。
-# v4：修复“持续客户端端点”反复探测导致的升级循环（评估快照里没有 target: 检查，
-# 旧版靠 probe_failed 判定外部端点恒为假）。固定路径健康且同一客户端故障在多轮
-# 历史中持续出现时停止重复请求探测，保留稳定指纹的 review_request。
+# v6：国内与代理同时失败时读取 node_observations 的选路尝试记录，首选池失败才建议
+# recheck_nodes；无节点证据时保持保守。
+# v5：全部节点 alive=false 但固定代理通过时，仅记录测速结果不可信，不刷新订阅或换节点。
+# v4：同一外部客户端端点连续多轮失败后停止重复探测，保留稳定指纹的 review_request。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -142,9 +140,18 @@ def inspect(snapshot):
     if sustained == 1:
         parts = parts + ['时延仅作路径证据，不代表吞吐上限']
 
+    # target:<domain> 检查中的 ValueError/gaierror 表示受保护探测无法解析出可用的
+    # 公共地址（实测 a.v.smtcdns.com 在网关与公共解析均无 A 记录）。这不是数据面证据，
+    # 继续请求同一探测只会重复得到同一错误。
+    probe_errors = {}
+    for key in checks:
+        if key[:7] == 'target:' and checks[key].get('ok') is not True:
+            probe_errors[key[7:]] = checks[key].get('error', 'unknown')
+
     dial_only = []
     actionable = []
     probe_capped = []
+    unprobeable = []
     for issue in issues:
         domain = issue.get('domain')
         paths = business_checks.get(domain, {}).get('result', {}).get('paths', {})
@@ -155,6 +162,8 @@ def inspect(snapshot):
         direct_reach = direct.get('transport_ok') is True or (direct.get('passed_samples') or 0) >= 1
         proxy_reach = proxy_path.get('transport_ok') is True or (proxy_path.get('passed_samples') or 0) >= 1
         dual_fail = direct_fail and proxy_fail and not (direct_reach or proxy_reach)
+        probe_error = probe_errors.get(domain, '')
+        unprobe = probe_error == 'ValueError' or probe_error == 'gaierror'
         recent_faults = 0
         for entry in history[-12:]:
             faults = entry.get('faults_after_confirmation')
@@ -162,7 +171,9 @@ def inspect(snapshot):
                 faults = entry.get('faults', [])
             if 'client_business:' + domain in faults:
                 recent_faults = recent_faults + 1
-        if dual_fail:
+        if unprobe:
+            unprobeable = unprobeable + [domain]
+        elif dual_fail:
             dial_only = dial_only + [domain]
         else:
             actionable = actionable + [domain]
@@ -171,10 +182,15 @@ def inspect(snapshot):
 
     if len(dial_only) > 0:
         parts = parts + ['固定检查正常但同一客户端端点验证失败且指向端点问题，保留记录但不重复升级；未验证为用户业务恢复']
+    if len(unprobeable) > 0:
+        parts = parts + ['客户端引用的域名没有可用的公共解析地址（受保护探测无法完成），保留记录且不重复探测；不是代理或分流故障，实际应用影响仍未验证']
     if len(probe_capped) > 0:
         parts = parts + ['同一客户端端点连续多轮失败，已停止重复探测以避免同一错误反复升级；问题仍未解决，也未验证为用户业务恢复']
 
-    targets = [item for item in real_targets if item not in dial_only and item not in probe_capped]
+    targets = [
+        item for item in real_targets
+        if item not in dial_only and item not in probe_capped and item not in unprobeable
+    ]
 
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
@@ -184,5 +200,8 @@ def inspect(snapshot):
         return {'summary': summary, 'action': action, 'probe_domains': targets}
     if len(issues) > 0:
         first = issues[0]
+        matching = [issue for issue in issues if issue.get('domain') in actionable]
+        if len(matching) > 0:
+            first = matching[0]
         return {'summary': summary + '；实际客户端问题尚未解决', 'action': action, 'probe_domains': targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
     return {'summary': summary, 'action': action, 'probe_domains': probes}
