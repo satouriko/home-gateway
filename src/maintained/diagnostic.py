@@ -1,4 +1,6 @@
-# 主动巡检分析（v12）：健康时 action=none；代理失败建议 recheck_nodes；
+# 主动巡检分析（v13）：已安排且未过期的节点复检期间，不重复发客户端复核请求，
+# 与摘要“等待复检完成后再判断”一致；复检过期或未安排时仍按原规则复核。
+# v12：健康时 action=none；代理失败建议 recheck_nodes；
 # 记录节点池健康探测与固定代理检查的矛盾（更可能是测速/健康URL假阴性，不重复换节点）；
 # 记录客户端观测时效（超过一小时无新连接时，业务结论不代表当前路径）；
 # 未知/不可解析端点保留记录但不重复探测，避免“探测-失败-再探测”循环。
@@ -113,6 +115,13 @@ def inspect(snapshot):
     if pool_unavailable and now_ts > 0 and node_checked > 0 and (now_ts - node_checked) <= 900:
         node_recent = True
     pending = status.get('pending_recovery', {})
+    pending_recheck = False
+    if pending and pending.get('operation') == 'recheck_nodes':
+        deadline = pending.get('deadline')
+        if deadline is None or deadline <= 0:
+            pending_recheck = True
+        elif now_ts <= 0 or deadline >= now_ts:
+            pending_recheck = True
     us_attempts_failed = 0
     for row in last_node_event.get('attempts', []):
         if row.get('region') == 'US_AUTO' and row.get('ok') is False:
@@ -255,6 +264,8 @@ def inspect(snapshot):
 
     if len(issues) > 0 and len(reviewable) == 0:
         return {'summary': summary, 'action': action, 'probe_domains': targets}
+    if len(issues) > 0 and len(reviewable) > 0 and pending_recheck:
+        return {'summary': summary + '；已知客户端问题保留记录，待节点复检完成后按新证据复核', 'action': action, 'probe_domains': targets}
     if len(issues) > 0:
         first = issues[0]
         matching = [issue for issue in issues if issue.get('domain') in reviewable]
