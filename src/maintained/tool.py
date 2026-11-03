@@ -276,6 +276,51 @@ def self_test():
     check("inspect_always_has_observations",
           isinstance(inspect_endpoint({"domains": ["http://x/"]}).get("observations"), list))
 
+    # --- protected-trigger mirrors: regression assertions for the repeat-call ---
+    on = {"status": {"services": {"net-gateway.service": {"ActiveState": "active"}}}}
+    healthy = dict(on, checks={"mainland_https": {"ok": True, "result": {"expected_health_status": True}}})
+    bookkeeping = dict(on, checks={}, business_observations={"issues": [
+        {"domain": "a.example", "resolved": False},
+        {"domain": "b.example", "resolved": True},
+    ]})
+    check("trigger_healthy_no_faults", _trigger_faults(healthy) == [])
+    check("trigger_counts_only_unresolved",
+          _trigger_faults(bookkeeping) == ["client_business:a.example"])
+
+    stable = _trigger_signature(bookkeeping, _trigger_faults(bookkeeping))
+    check("trigger_signature_stable",
+          stable == _trigger_signature(bookkeeping, _trigger_faults(bookkeeping)))
+    moved = dict(bookkeeping, status={"services": on["status"]["services"],
+                                      "provider_counts": {"us": 13, "other": 70}})
+    check("trigger_provider_counts_changes_signature",
+          _trigger_signature(moved, _trigger_faults(moved)) != stable)
+    check("trigger_audit_calls_provider_change_duplicate",
+          audit_trigger({"diagnosis": moved, "state": {
+              "last_ai_fingerprint": "older", "previous": bookkeeping}}).get("verdict")
+          == "duplicate_provider_counts_change")
+
+    broken = dict(on, checks={"proxy_https": {"ok": False, "result": {"expected_health_status": False}}},
+                  business_observations=bookkeeping["business_observations"])
+    broken_signature = _trigger_signature(broken, _trigger_faults(broken))
+    check("trigger_audit_calls_new_fault_new_evidence",
+          audit_trigger({"diagnosis": broken, "state": {
+              "last_ai_fingerprint": "older", "previous": bookkeeping}}).get("verdict")
+          == "new_or_changed_fault")
+    check("trigger_audit_calls_recovery_echo",
+          audit_trigger({"diagnosis": bookkeeping, "state": {
+              "last_ai_fingerprint": broken_signature, "previous": broken}}).get("verdict")
+          == "recovery_echo")
+    check("trigger_same_signature_no_review",
+          audit_trigger({"diagnosis": bookkeeping,
+                         "state": {"last_ai_fingerprint": stable}}).get("review_trigger") is False)
+    check("trigger_audit_requires_diagnosis",
+          audit_trigger({}).get("error") == "diagnosis_required")
+    direct = dict(on, status={"services": on["status"]["services"], "policy": {"mode": "direct"}},
+                  checks={"proxy_https": {"ok": False, "result": {}}})
+    check("trigger_direct_mode_skips_proxy_checks", _trigger_faults(direct) == [])
+    check("trigger_run_dispatch",
+          run({"operation": "audit_trigger", "diagnosis": healthy}).get("verdict") == "healthy_no_trigger")
+
     passed = sum(1 for item in checks if item["passed"])
     return {
         "ok": passed == len(checks),
@@ -295,6 +340,158 @@ def self_test():
     }
 
 
+# --- protected-trigger audit (read-only mirror) ------------------------------
+# Mirrors deployed patrol.py: fault_keys() (unresolved client_business issues,
+# node-pool urgent, service, disk, fixed checks), fault_signature() (sha256 of
+# faults + evidence + provider_counts) and urgent_ai_needed() (faults and
+# signature != last). A transient fixed-path failure changes the signature and
+# its recovery changes it again; business_watch never marks issues resolved, so
+# those keys stay in fault_keys() and every provider_counts change re-triggers.
+FIXED_CHECK_SKIP_DIRECT = ("gateway_dns_foreign", "proxy_https")
+
+
+def _trigger_faults(diagnosis):
+    diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
+    faults = []
+    business = diagnosis.get("business_observations") or {}
+    for issue in business.get("issues") or []:
+        if isinstance(issue, dict) and issue.get("resolved") is False:
+            faults.append("client_business:" + str(issue.get("domain") or "unknown"))
+    status = diagnosis.get("status") or {}
+    direct = (status.get("policy") or {}).get("mode") == "direct"
+    nodes = diagnosis.get("node_observations") or {}
+    if not direct and nodes.get("urgent") is True:
+        faults.append("proxy_node_pool")
+    gateway = (status.get("services") or {}).get("net-gateway.service") or {}
+    if gateway.get("ActiveState") != "active":
+        faults.append("gateway_service")
+    if (status.get("storage") or {}).get("critical"):
+        faults.append("disk_space")
+    checks = diagnosis.get("checks") or {}
+    for name in checks:
+        if direct and name in FIXED_CHECK_SKIP_DIRECT:
+            continue
+        item = checks.get(name) or {}
+        result = item.get("result") or {}
+        count = result.get("answer_count", 0)
+        if (item.get("ok") is not True
+                or ("rcode" in result and (result.get("rcode") != 0 or count < 1))
+                or result.get("expected_health_status") is False):
+            faults.append(name)
+    return sorted(set(faults))
+
+
+def _evidence_row(diagnosis, name):
+    item = (diagnosis.get("checks") or {}).get(name) or {}
+    result = item.get("result") or {}
+    return {
+        "rcode": result.get("rcode"),
+        "http_status": result.get("http_status"),
+        "expected_health_status": result.get("expected_health_status"),
+        "error": item.get("error"),
+    }
+
+
+def _trigger_signature(diagnosis, faults):
+    import hashlib
+    import json
+    evidence = {name: _evidence_row(diagnosis, name) for name in faults}
+    if "proxy_node_pool" in faults:
+        evidence["proxy_node_pool"]["incident"] = (diagnosis.get("node_observations") or {}).get("fingerprint")
+    payload = {
+        "faults": faults,
+        "evidence": evidence,
+        "provider_counts": (diagnosis.get("status") or {}).get("provider_counts") or {},
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
+
+
+def _fault_groups(faults):
+    groups = {"client_business": [], "fixed_path": [], "node_pool": [], "service_or_storage": []}
+    for name in faults:
+        if name.startswith("client_business:"):
+            groups["client_business"].append(name)
+        elif name == "proxy_node_pool":
+            groups["node_pool"].append(name)
+        elif name in ("gateway_service", "disk_space"):
+            groups["service_or_storage"].append(name)
+        else:
+            groups["fixed_path"].append(name)
+    return groups
+
+
+def audit_trigger(request):
+    """Say whether a new dispatch would be new evidence or a repeat."""
+    diagnosis = request.get("diagnosis")
+    if not isinstance(diagnosis, dict):
+        return {"ok": False, "error": "diagnosis_required", "observations": []}
+    state = request.get("state") or {}
+    previous = state.get("previous") if isinstance(state.get("previous"), dict) else None
+    faults = _trigger_faults(diagnosis)
+    signature = _trigger_signature(diagnosis, faults)
+    last = state.get("last_ai_fingerprint")
+    review_trigger = bool(faults) and signature != last
+    verdict = "healthy_no_trigger"
+    deltas = {"added_faults": [], "removed_faults": [], "changed_evidence": [],
+              "provider_counts_changed": False, "previous_signature": None}
+    if faults:
+        verdict = "same_signature_as_last_ai" if not review_trigger else "signature_changed_no_previous"
+    if faults and review_trigger and previous is not None:
+        prev_faults = _trigger_faults(previous)
+        added = [name for name in faults if name not in prev_faults]
+        removed = [name for name in prev_faults if name not in faults]
+        changed = [name for name in faults
+                   if name in prev_faults and _evidence_row(diagnosis, name) != _evidence_row(previous, name)]
+        prev_counts = (previous.get("status") or {}).get("provider_counts") or {}
+        counts = (diagnosis.get("status") or {}).get("provider_counts") or {}
+        counts_changed = prev_counts != counts
+        deltas = {"added_faults": added, "removed_faults": removed, "changed_evidence": changed,
+                  "provider_counts_changed": counts_changed,
+                  "previous_signature": _trigger_signature(previous, prev_faults)}
+        if added:
+            verdict = "new_or_changed_fault"
+        elif counts_changed:
+            verdict = "duplicate_provider_counts_change"
+        elif changed:
+            verdict = "changed_evidence"
+        elif removed:
+            removed_groups = _fault_groups(removed)
+            if removed_groups["fixed_path"] and not _fault_groups(faults)["fixed_path"]:
+                verdict = "recovery_echo"
+            else:
+                verdict = "duplicate_business_bookkeeping"
+
+    notes = {
+        "healthy_no_trigger": "no fault key; no emergency call justified",
+        "same_signature_as_last_ai": "same signature as the last dispatch; a repeat adds no evidence",
+        "signature_changed_no_previous": "signature differs from the last dispatch, but no prior snapshot was supplied",
+        "duplicate_provider_counts_change": "only provider_counts differ; same failing paths, so bookkeeping not new evidence",
+        "duplicate_business_bookkeeping": "only permanently-unresolved business keys differ; no new path evidence",
+        "changed_evidence": "same fault keys, changed check evidence; read the per-fault rows first",
+        "recovery_echo": "a fixed-path fault disappeared; usually a second call for one incident",
+        "new_or_changed_fault": "a fault key appeared or a fixed-path check failed; treat as new evidence",
+    }.get(verdict, "unclassified")
+
+    observations = []
+    groups = _fault_groups(faults)
+    for name in faults[:6]:
+        kind = next((group for group in groups if name in groups[group]), "other")
+        observations.append({"fault": name, "kind": kind, "evidence": _evidence_row(diagnosis, name)})
+    return {
+        "ok": True,
+        "verdict": verdict,
+        "note": notes,
+        "faults": faults,
+        "groups": groups,
+        "signature": signature,
+        "last_ai_fingerprint": last,
+        "review_trigger": review_trigger,
+        "deltas": deltas,
+        "observations": observations,
+        "scope": "read-only mirror of the protected patrol trigger; changes nothing and proves nothing about user-visible health",
+    }
+
+
 def run(request):
     request = request if isinstance(request, dict) else {}
     operation = request.get("operation", "inspect")
@@ -302,5 +499,7 @@ def run(request):
         return self_test()
     if operation == "inspect":
         return inspect_endpoint(request)
+    if operation == "audit_trigger":
+        return audit_trigger(request)
     return {"ok": False, "error": "unknown_operation",
-            "operations": ["self_test", "inspect"]}
+            "operations": ["self_test", "inspect", "audit_trigger"]}
