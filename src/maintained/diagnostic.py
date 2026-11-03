@@ -1,30 +1,10 @@
-# v11：停止“根路径应用层拒绝”端点的重复探测与复核循环。2026-11-03 11:15 实测
-# amp-api-edge.apps.apple.com：真实客户端出现 14 次 timeout，但受保护对照直连/代理各 3/3
-# 传输成功且根路径稳定返回 404（该 API 根路径本就无内容）。旧版把它列为 actionable，
-# 每轮都发 review_request，但重复探测只会得到同一个 404，不能获得新证据。v11 在固定路径
-# 健康、同一域名已连续 >=2 轮出现、且直连与代理都“传输可达 + 根路径 4xx”时，标记为
-# 应用层拒绝：保留未解决问题记录，不重复探测、不重复请求复核；明确这不等于应用可用。
-# 同时修正 probe_capped 仍发 review_request 的不一致（文字称已停止升级，实际仍在升级）。
-# v10：补齐 bootstrap_dns_api（经上游 192.168.2.1 解析 api.deepseek.com，控制路径引导 DNS）
-# 的检查。v9 及更早版本在该项 TimeoutError 时仍输出“固定国内与代理健康检查通过”，
-# 与本轮观测（bootstrap 失败、国内/代理正常）矛盾，属于同类“部分检查被当作全部通过”的误判。
-# v10 仅在摘要中明确记录该失败，不据此换节点、不请求探测：它属于控制路径解析，不是用户
-# 数据面证据；若国内/代理同时失败，仍走原有 recheck_nodes 分支。
-# v7：修复“不可探测域名”导致的反复升级循环。2026-11-03 09:2x 实测：客户端反复对
-# a.v.smtcdns.com 报 DNS 失败（never connected）。网关原样查询该名返回 rcode=3（NXDOMAIN），
-# 受保护 probe 因“无公共 IPv4 应答”抛 ValueError；旧版把它当作可探测端点，下一轮又请求
-# 同一目标，形成“探测-失败-再探测”的循环，且把已知外部死端点持续升级为 anomaly。
-# 本版把 target:<domain> 检查中 ValueError/gaierror 的域名标为“不可探测”：保留问题记录、
-# 不重复请求探测、避免重复 review；文字明确这是客户端引用的无解析地址，不是代理/分流故障，
-# 应用层影响仍未验证。另对无任何合成检查、连续 >=8 轮失败且固定路径健康的端点同样停止升级。
-# 注意：本程序源码受 AST 白名单限制，只能用 len/list 等允许的函数，不能用 isinstance、
-# 字符串 startswith 或 f-string（Attribute 仅允许字典方法）。
-# 保守巡检分析：健康时不建议操作；只有能区分原因的持续证据才建议有界修复。
-# 只读快照与 history；不把单次成功、单次慢、存活状态或小样本当成整条路径健康。
-# v6：国内与代理同时失败时读取 node_observations 的选路尝试记录，首选池失败才建议
-# recheck_nodes；无节点证据时保持保守。
-# v5：全部节点 alive=false 但固定代理通过时，仅记录测速结果不可信，不刷新订阅或换节点。
-# v4：同一外部客户端端点连续多轮失败后停止重复探测，保留稳定指纹的 review_request。
+# 主动巡检分析（v12）：健康时 action=none；代理失败建议 recheck_nodes；
+# 记录节点池健康探测与固定代理检查的矛盾（更可能是测速/健康URL假阴性，不重复换节点）；
+# 记录客户端观测时效（超过一小时无新连接时，业务结论不代表当前路径）；
+# 未知/不可解析端点保留记录但不重复探测，避免“探测-失败-再探测”循环。
+# v11 起：根路径稳定 4xx 且双路径传输可达的端点归为应用层拒绝，不重复复核。
+# v8 起：NXDOMAIN/无公共地址域名只保留记录、不再请求探测。
+# 本程序只读快照，不触发测速，不改变用户分流目标。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -109,8 +89,6 @@ def inspect(snapshot):
         and not service_bad and not dns_cn_bad and not dns_foreign_bad
     )
 
-    # 快照中的 node_observations 由网关自身校验后写入；程序白名单不允许 isinstance，
-    # 这里用真值判断与 .get 访问。
     node_obs = snapshot.get('node_observations', {})
     node_events = node_obs.get('events', []) if node_obs else []
     node_events = node_events if node_events else []
@@ -118,6 +96,23 @@ def inspect(snapshot):
     pool_selection_failed = (
         last_node_event.get('preferred_failed') is True or last_node_event.get('unavailable') is True
     )
+
+    node_state = node_obs.get('state', '') if node_obs else ''
+    pool_unavailable = False
+    if node_state == 'unavailable':
+        pool_unavailable = True
+    if last_node_event.get('unavailable') is True:
+        pool_unavailable = True
+    now_ts = business.get('checked_at', 0)
+    if now_ts is None or now_ts <= 0:
+        now_ts = 0
+        if len(history) > 0:
+            now_ts = history[-1].get('at', 0)
+    node_checked = node_obs.get('checked_at', 0) if node_obs else 0
+    node_recent = False
+    if pool_unavailable and now_ts > 0 and node_checked > 0 and (now_ts - node_checked) <= 900:
+        node_recent = True
+    pending = status.get('pending_recovery', {})
     us_attempts_failed = 0
     for row in last_node_event.get('attempts', []):
         if row.get('region') == 'US_AUTO' and row.get('ok') is False:
@@ -138,9 +133,6 @@ def inspect(snapshot):
         probes = real_targets
         parts = parts + ['国内与代理同时失败，更像出口或解析层问题，不宜仅换节点']
     elif mainland_bad:
-        # v9：旧逻辑只在代理失败时分支，国内直连失败而代理正常会落入 else，
-        # 错误输出“固定国内与代理健康检查通过”。mainland_direct=true 时这是
-        # 用户直连路径退化，必须明确指出，且换节点不能修复直连。
         parts = parts + ['国内直连检查失败而代理正常，问题在直连或解析层，不建议仅换节点']
     elif sustained == 1:
         action = 'recheck_nodes'
@@ -150,6 +142,8 @@ def inspect(snapshot):
         parts = parts + ['固定国内与代理健康检查通过；用户业务仍以独立观测为准']
         if len(pool) >= 2 and len(dead) == len(pool):
             parts = parts + ['节点测速把偏好池全部标为不可用，但固定代理检查通过，测速结果不可信，不据此刷新订阅或换节点']
+        if node_recent:
+            parts = parts + ['节点池健康探测同时全部失败（选中节点为空），与固定代理检查通过相互矛盾；更可能是健康URL或测速假阴性，不能据此认定用户路径中断，不重复换节点']
 
     if dns_cn_bad or dns_foreign_bad:
         parts = parts + ['网关 DNS 检查异常，需先看解析层']
@@ -162,11 +156,6 @@ def inspect(snapshot):
     if sustained == 1:
         parts = parts + ['时延仅作路径证据，不代表吞吐上限']
 
-    # ValueError/gaierror 表示受保护探测无法解析出可用的公共地址（实测
-    # a.v.smtcdns.com 在网关与上游均返回 NXDOMAIN）。这不是数据面证据，继续请求
-    # 同一探测只会重复得到同一错误。v8 修正：生产快照把这一状态写在
-    # business_observations.checks.<domain>.result 的 state/error_category，
-    # 而不是 checks 的 target:<domain> 键；只认后者会漏判并反复升级。
     probe_errors = {}
     for key in checks:
         if key[:7] == 'target:' and checks[key].get('ok') is not True:
@@ -233,6 +222,21 @@ def inspect(snapshot):
         parts = parts + ['同一客户端端点连续多轮失败，已停止重复探测以避免同一错误反复升级；问题仍未解决，也未验证为用户业务恢复']
     if len(app_rejected) > 0:
         parts = parts + ['端点根路径返回 HTTP 4xx（应用层拒绝）且直连/代理传输均可达，保留问题记录并停止重复探测与复核；这不证明应用层可用，实际业务影响仍未验证']
+
+    observations = snapshot.get('observations', {})
+    obs_domains = observations.get('domains', []) if observations else []
+    newest_seen = 0
+    for row in obs_domains:
+        seen = row.get('last_seen', 0)
+        if seen is not None and seen > newest_seen:
+            newest_seen = seen
+    stale_clients = False
+    if newest_seen > 0 and now_ts > newest_seen and (now_ts - newest_seen) >= 3600:
+        stale_clients = True
+    if stale_clients:
+        parts = parts + ['客户端观测超过一小时没有新连接（设备可能空闲或采样缺口），业务结论基于旧数据，不代表当前用户路径']
+    if pending:
+        parts = parts + ['系统已安排节点复检，等待其完成后按新证据判断']
 
     targets = [
         item for item in real_targets
