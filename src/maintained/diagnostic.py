@@ -140,13 +140,19 @@ def inspect(snapshot):
     if sustained == 1:
         parts = parts + ['时延仅作路径证据，不代表吞吐上限']
 
-    # target:<domain> 检查中的 ValueError/gaierror 表示受保护探测无法解析出可用的
-    # 公共地址（实测 a.v.smtcdns.com 在网关与公共解析均无 A 记录）。这不是数据面证据，
-    # 继续请求同一探测只会重复得到同一错误。
+    # ValueError/gaierror 表示受保护探测无法解析出可用的公共地址（实测
+    # a.v.smtcdns.com 在网关与上游均返回 NXDOMAIN）。这不是数据面证据，继续请求
+    # 同一探测只会重复得到同一错误。v8 修正：生产快照把这一状态写在
+    # business_observations.checks.<domain>.result 的 state/error_category，
+    # 而不是 checks 的 target:<domain> 键；只认后者会漏判并反复升级。
     probe_errors = {}
     for key in checks:
         if key[:7] == 'target:' and checks[key].get('ok') is not True:
             probe_errors[key[7:]] = checks[key].get('error', 'unknown')
+    for domain in business_checks:
+        result = business_checks.get(domain, {}).get('result', {})
+        if result.get('state') == 'probe_unavailable' and domain not in probe_errors:
+            probe_errors[domain] = result.get('error_category', 'unknown')
 
     dial_only = []
     actionable = []
