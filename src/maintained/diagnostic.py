@@ -1,3 +1,8 @@
+# v10：补齐 bootstrap_dns_api（经上游 192.168.2.1 解析 api.deepseek.com，控制路径引导 DNS）
+# 的检查。v9 及更早版本在该项 TimeoutError 时仍输出“固定国内与代理健康检查通过”，
+# 与本轮观测（bootstrap 失败、国内/代理正常）矛盾，属于同类“部分检查被当作全部通过”的误判。
+# v10 仅在摘要中明确记录该失败，不据此换节点、不请求探测：它属于控制路径解析，不是用户
+# 数据面证据；若国内/代理同时失败，仍走原有 recheck_nodes 分支。
 # v7：修复“不可探测域名”导致的反复升级循环。2026-11-03 09:2x 实测：客户端反复对
 # a.v.smtcdns.com 报 DNS 失败（never connected）。网关原样查询该名返回 rcode=3（NXDOMAIN），
 # 受保护 probe 因“无公共 IPv4 应答”抛 ValueError；旧版把它当作可探测端点，下一轮又请求
@@ -52,6 +57,9 @@ def inspect(snapshot):
         or dns_foreign_result.get('rcode', 0) != 0
         or (dns_foreign_count is not None and dns_foreign_count < 1)
     )
+
+    bootstrap = checks.get('bootstrap_dns_api', {})
+    bootstrap_bad = 'bootstrap_dns_api' in checks and bootstrap.get('ok') is not True
 
     service_bad = services.get('net-gateway.service', {}).get('ActiveState', 'active') != 'active'
 
@@ -138,6 +146,8 @@ def inspect(snapshot):
 
     if dns_cn_bad or dns_foreign_bad:
         parts = parts + ['网关 DNS 检查异常，需先看解析层']
+    if bootstrap_bad:
+        parts = parts + ['控制路径引导 DNS 检查失败（解析 api.deepseek.com 超时），网关 DNS 与国内/代理检查未受影响，保留观察、不据此换节点']
     if 0 < len(dead) < len(pool):
         parts = parts + ['偏好池有%d/%d个节点测速失败' % (len(dead), len(pool))]
     if streak >= 3:
