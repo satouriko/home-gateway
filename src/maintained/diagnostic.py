@@ -1,4 +1,4 @@
-# 主动巡检（v16）：已知长期客户端端点的抑制不再依赖“固定检查全部正常”。
+# 主动巡检（v17）。
 # 修复 v15 在固定检查瞬时失败时把同一已连续多轮失败的端点再次 review_request、
 # 并写出与事实相反的“固定检查正常”。只读快照，不触发测速，不改用户分流目标。
 
@@ -55,7 +55,13 @@ def inspect(snapshot):
     ]
 
     tail = history[-6:]
-    flags = [1 if entry.get('faults') else 0 for entry in tail]
+    flags = []
+    for entry in tail:
+        path_faults = 0
+        for item in entry.get('faults') or []:
+            if item[:15] != 'client_business':
+                path_faults = path_faults + 1
+        flags = flags + [1 if path_faults > 0 else 0]
     streak = 0
     running = 1
     for offset in range(len(flags)):
@@ -207,7 +213,7 @@ def inspect(snapshot):
             actionable = actionable + [domain]
             if recent_faults >= 8:
                 probe_capped = probe_capped + [domain]
-            elif root_rejected and recent_faults >= 2:
+            elif root_rejected:
                 app_rejected = app_rejected + [domain]
 
     if len(dial_only) > 0:
@@ -222,8 +228,6 @@ def inspect(snapshot):
     if len(app_rejected) > 0:
         parts = parts + ['端点根路径返回 HTTP 4xx（应用层拒绝）且直连/代理传输均可达，保留问题记录并停止重复探测与复核；这不证明应用层可用，实际业务影响仍未验证']
 
-    # 生产快照不含 observations（patrol 只传 diagnosis+history+quality_summary），
-    # 客户端活动时效仍需受保护层补充；这里只用快照内真实可得的时间戳判断样本时效。
     newest_business_ts = 0
     for domain in business_checks:
         entry = business_checks.get(domain, {})
