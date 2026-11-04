@@ -1,8 +1,6 @@
-# 主动巡检（v14）：action=recheck_nodes 已确定时不再附带 review_request/probe_domains，
-# 避免一次代理检查失败既安排节点复检又重复复核已知端点（pending 在程序运行后才创建）。
-# 另用 business_observations.checks 时间判断路径样本过期；生产快照不含 observations，
-# 旧时效分支已移除。v13 防重复复核、v12 矛盾提示、v11 应用层拒绝、v8 不重复探测不变。
-# 只读快照，不触发测速，不改变用户分流目标。
+# 主动巡检（v15）：probe_unavailable 的 ValueError/gaierror 原因未确认时不再断言
+# “没有可用的公共解析地址”（同一错误也可能来自应答超上限或非公网地址）。
+# 保留 v14 的 recheck_nodes 去重与旧口径；只读快照，不触发测速，不改变用户分流目标。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -215,7 +213,7 @@ def inspect(snapshot):
     if len(dial_only) > 0:
         parts = parts + ['固定检查正常但同一客户端端点验证失败且指向端点问题，保留记录但不重复升级；未验证为用户业务恢复']
     if len(unprobeable) > 0:
-        parts = parts + ['客户端引用的域名没有可用的公共解析地址（受保护探测无法完成），保留记录且不重复探测；不是代理或分流故障，实际应用影响仍未验证']
+        parts = parts + ['客户端引用的域名受保护探测无法完成（ValueError/gaierror），原因未确认：可能是名称不存在、解析失败或应答超上限；保留记录且不重复探测，需用端点解释工具核实，这不是代理或分流故障，实际应用影响未验证']
     if len(probe_capped) > 0:
         parts = parts + ['同一客户端端点连续多轮失败，已停止重复探测以避免同一错误反复升级；问题仍未解决，也未验证为用户业务恢复']
     if len(app_rejected) > 0:
