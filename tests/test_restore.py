@@ -14,6 +14,58 @@ import test_backup
 
 
 class RestoreTests(unittest.TestCase):
+    def test_workflow_and_route_preferences_roundtrip_without_private_history(self):
+        import hashlib
+        source = 'def inspect(snapshot): return {"wake": "none"}\n'
+        version = hashlib.sha256(source.encode()).hexdigest()[:16]
+        builtin = 'def inspect(snapshot): return {"wake": "urgent"}\n'
+        self.fixture.put('/usr/local/share/net-gateway-agent/workflow.py', builtin)
+        self.fixture.put('/var/lib/net-gateway-agent/workflow-state.json', json.dumps({
+            'format': 1, 'active': {'source': source, 'version': version},
+            'previous': {'source': 'private previous'}, 'last_failure': 'private failure'}))
+        preferences = {'adaptive_routes': {'example.com': 'proxy'}, 'routing_strategy': {
+            'require_degraded_current': True, 'require_public_service_basis': True,
+            'require_route_conflict': True, 'allow_latency_only': False}}
+        self.fixture.put('/var/lib/net-gateway-agent/approved-policy.json', json.dumps({'preferences': preferences}))
+        backup.write_snapshot(self.repo, backup.collect(self.fixture.root))
+        target = self.temp / 'workflow-restored'
+        restore.stage(self.repo, target, self.credentials)
+        state = json.loads((target / 'var/lib/net-gateway-agent/workflow-state.json').read_text())
+        self.assertEqual(state['active']['version'], version)
+        self.assertEqual(state['active']['source'], source)
+        self.assertIsNone(state['previous'])
+        self.assertNotIn('last_failure', state)
+        self.assertEqual((target / 'usr/local/share/net-gateway-agent/workflow.py').read_text(), builtin)
+        approved = json.loads((target / 'var/lib/net-gateway-agent/approved-policy.json').read_text())
+        self.assertEqual(approved['preferences'], preferences)
+        self.assertFalse((target / 'var/lib/net-gateway-agent/incidents.json').exists())
+
+    def test_builtin_workflow_roundtrip_does_not_fabricate_an_active_publication(self):
+        builtin = 'def inspect(snapshot): return {"wake": "urgent"}\n'
+        self.fixture.put('/usr/local/share/net-gateway-agent/workflow.py', builtin)
+        backup.write_snapshot(self.repo, backup.collect(self.fixture.root))
+        target = self.temp / 'builtin-restored'
+        restore.stage(self.repo, target, self.credentials)
+        state = json.loads((target / 'var/lib/net-gateway-agent/workflow-state.json').read_text())
+        self.assertIsNone(state['active'])
+        self.assertIsNone(state['previous'])
+        self.assertEqual((target / 'usr/local/share/net-gateway-agent/workflow.py').read_text(), builtin)
+
+    def test_session_title_patch_license_and_provenance_survive_finite_restore(self):
+        sources = {'session-list-title.patch': 'diff --git a/title.js b/title.js\n',
+                   'title-provenance.json': '{"source":"pinned rc.5 packages"}\n',
+                   'LICENSE.session-title': 'MIT fixture license\n'}
+        for name, data in sources.items():
+            self.fixture.put('/opt/dsh/patches/' + name, data)
+        files = backup.collect(self.fixture.root)
+        for name, data in sources.items():
+            self.assertEqual(files['runtime/dsh/patches/' + name], data.encode())
+        backup.write_snapshot(self.repo, files)
+        target = self.temp / 'title-patch-restored'
+        restore.stage(self.repo, target, self.credentials)
+        for name, data in sources.items():
+            self.assertEqual((target / 'opt/dsh/patches' / name).read_text(), data)
+
     def setUp(self):
         fixture = test_backup.PublicBackupTests()
         fixture.setUp()

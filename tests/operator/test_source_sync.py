@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from concurrent.futures import ProcessPoolExecutor
 
-from source_sync import SourceSyncRegistry, snapshot_versions
+from source_sync import SourceSyncRegistry, snapshot_versions, validate_request_descriptor
 
 
 SESSION = 'session-12345678-1234-4234-8234-123456789abc'
@@ -34,6 +34,51 @@ class SourceSyncTests(unittest.TestCase):
     def register(self, reason='program_publish', version='a' * 16, **kwargs):
         return self.registry.register(reason, session_id=SESSION, version=version, **kwargs)
 
+    def test_message_survives_restart_and_descriptor_omits_session_and_receipt_state(self):
+        message = ('fix(diagnostic): 修复目标故障分类\n\n'
+                   '单目标失败曾误判全局故障，需要保留正常对照。\n\n'
+                   '诊断：增加正常目标对照。\n\n验证：python -m unittest tests.test_diagnostic')
+        first = self.register(commit_message=message)
+        latest = self.register('skill_publish', 'b' * 16)
+        restarted = SourceSyncRegistry(self.path)
+        descriptor = restarted.request_descriptor(latest['id'])
+        self.assertEqual(descriptor['id'], latest['id'])
+        self.assertEqual(descriptor['publications'][0]['commit_message'], message)
+        self.assertEqual(descriptor['publications'][0]['version'], 'a' * 16)
+        self.assertNotIn('session_id', json.dumps(descriptor))
+        self.assertNotIn('requested_at', json.dumps(descriptor))
+        self.assertEqual(restarted.records()[0]['commit_message'], message)
+        self.assertEqual(self.registry.register('program_publish', session_id=SESSION,
+                         version='a' * 16, request_id=first['id'], commit_message=message)['id'], first['id'])
+        with self.assertRaisesRegex(ValueError, 'identity conflict'):
+            self.registry.register('program_publish', session_id=SESSION, version='a' * 16,
+                                   request_id=first['id'], commit_message=message.replace('修复', '完善'))
+
+    def test_invalid_or_secret_message_is_rejected_before_registry_is_mutated(self):
+        valid = 'fix(policy): 保留显式直连意图\n\n默认规则曾覆盖用户选择。\n\n策略：保留用户例外。\n\n验证：路由对照通过。'
+        for message in ('', 'unstructured message', valid + '\x00', valid + '长' * 5000,
+                        valid + '\nsk-' + 'a' * 32, valid.replace('验证：', '结果：')):
+            with self.subTest(message=message[:30]), self.assertRaisesRegex(ValueError, 'commit message'):
+                self.register(commit_message=message)
+        with self.assertRaisesRegex(ValueError, 'commit message'):
+            self.register(commit_message=valid + '\nknown-private-value', forbidden=['known-private-value'])
+        self.assertEqual(self.registry.records(), [])
+
+    def test_descriptor_is_cutoff_scoped_and_rejects_malformed_or_unbounded_publications(self):
+        first = self.register()
+        self.register('skill_publish', 'b' * 16)
+        descriptor = self.registry.request_descriptor(first['id'])
+        self.assertEqual([r['id'] for r in descriptor['publications']], [first['id']])
+        item = descriptor['publications'][0]
+        for malformed in ({'id': 'bad'}, {'id': first['id'], 'format': 1, 'publications': [item, item]},
+                          {'id': first['id'], 'format': 1, 'publications': [{**item, 'sequence': True}]},
+                          {'id': first['id'], 'format': 1, 'publications': [{**item, 'version': 'bad'}]},
+                          {'id': first['id'], 'format': 1, 'publications': [{**item, 'reason': []}]},
+                          {'id': first['id'], 'format': 1, 'publications': [{k: v for k, v in item.items() if k != 'version'}]},
+                          {'id': first['id'], 'format': 1, 'publications': [item] * 513}):
+            with self.subTest(malformed=str(malformed)[:60]), self.assertRaises(ValueError):
+                validate_request_descriptor(malformed)
+
     def test_snapshot_versions_hash_the_actual_exported_bytes(self):
         import hashlib
         files = {'src/maintained/diagnostic.py': b'program\n',
@@ -51,6 +96,18 @@ class SourceSyncTests(unittest.TestCase):
                              ('native_observe', 'preferences/audit-plan.json')]:
             self.assertEqual(result[reason], hashlib.sha256(files[name]).hexdigest()[:16])
         self.assertEqual(snapshot_versions({}), {})
+
+    def test_workflow_and_route_publications_use_actual_snapshot_versions_and_shared_supersession(self):
+        import hashlib
+        versions = snapshot_versions({'src/maintained/workflow.py': b'workflow bytes',
+                                      'preferences/network-policy.json': b'policy bytes'})
+        self.assertEqual(versions['workflow_publish'], hashlib.sha256(b'workflow bytes').hexdigest()[:16])
+        self.assertEqual(versions['route_apply'], versions['policy_apply'])
+        old = self.register('policy_apply', 'a' * 16)
+        current = self.register('route_apply', versions['route_apply'])
+        self.registry.reconcile(confirmed(current, versions))
+        self.assertEqual(self.registry.records()[0]['status'], 'superseded')
+        self.assertEqual(self.registry.records()[0]['superseded_by'], current['id'])
 
     def test_per_request_identity_survives_latest_queue_supersession_and_restart(self):
         first = self.register(now=1)

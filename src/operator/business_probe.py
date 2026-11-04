@@ -73,6 +73,7 @@ def _path(samples):
     else:
         application = next((kind for kind in ('rate_limited', 'server_error', 'rejected') if states.count(kind) >= 2), 'unverified')
     return {'sample_count': len(samples), 'transport_ok': all(item['transport_ok'] for item in samples),
+            'transport_failed_samples':sum(not item['transport_ok'] for item in samples),
             'http_ok': all(item['http_ok'] for item in samples),
             'business_ok': True if passed == len(samples) else False if failed else None,
             'usable': passed == len(samples), 'application_state': application,
@@ -124,3 +125,47 @@ def compare(target, run_probe, now):
                          'unverified_business_samples': sum(item['business_ok'] is None for values in samples.values() for item in values),
                          'transient_paths': sum(item['failed_samples'] == 1 for item in paths.values()),
                          'recurring_failure_paths': sum(item['failed_samples'] >= 2 for item in paths.values())}}
+
+
+def endpoint_spec(value):
+    if not isinstance(value,dict):return None
+    network=value.get('network');port=value.get('port',value.get('destinationPort'))
+    if isinstance(port,str) and port.isascii() and port.isdigit():port=int(port)
+    if network not in ('tcp','udp') or type(port) is not int or not 1<=port<=65535:return None
+    protocol=value.get('application_protocol','unknown')
+    if protocol not in ('tcp','tls','http','https','udp','quic','dns','unknown'):return None
+    if network=='tcp' and protocol in ('udp','quic','dns'):return None
+    return {'network':network,'port':port,'application_protocol':protocol}
+
+
+def compare_endpoint(target,endpoint,run_probe,now):
+    """Relevant-stage evidence, never an inferred logged-in application result."""
+    target=_target(target);endpoint=endpoint_spec(endpoint)
+    result={'target':target,'endpoint':endpoint,'observed_at':now,'origin':'protected_synthetic_probe',
+            'cached':False,'application_verified':False,'paths':{},'path_identity_verified':False}
+    if endpoint is None:return {**result,'state':'insufficient_endpoint_evidence'}
+    if endpoint['network']!='tcp':return {**result,'state':'unsupported_protocol'}
+    protocol=endpoint['application_protocol'];stage='http_response' if protocol in ('http','https') else 'tls_handshake' if protocol=='tls' else 'tcp_connect'
+    result['acceptance_stage']=stage;samples={'direct':[],'proxy':[]}
+    for _ in range(3):
+        for path in ('direct','proxy'):
+            try:raw=run_probe(target,path=path)
+            except Exception:raw={}
+            raw=raw if isinstance(raw,dict) else {};status=raw.get('http_status')
+            status=status if type(status) is int and 100<=status<=599 else None
+            okay=(raw.get('connect_ok') is True if raw.get('target_dial_verified') is True else None) if stage=='tcp_connect' else raw.get('tls_ok') is True if stage=='tls_handshake' else status is not None and raw.get('transport_ok') is True
+            elapsed=raw.get('elapsed_ms')
+            if type(elapsed) not in (int,float) or not math.isfinite(elapsed) or not 0<=elapsed<=120000:elapsed=None
+            samples[path].append({'stage_ok':okay,'path_verified':raw.get('path_verified') is True,
+                'elapsed_ms':elapsed,'http_status':status,'content_ok':raw.get('content_ok') if type(raw.get('content_ok')) is bool else None,
+                'business_rejected':status is not None and status>=400 or raw.get('content_ok') is False,
+                'business_error_kind':raw.get('business_error_kind') if raw.get('business_error_kind') in ('region_rejected','rate_limited','server_error','auth_required') else None})
+    for path,rows in samples.items():
+        times=[x['elapsed_ms'] for x in rows if x['stage_ok'] and x['elapsed_ms'] is not None]
+        result['paths'][path]={'sample_count':3,'success_samples':sum(x['stage_ok'] is True for x in rows),'failed_samples':sum(x['stage_ok'] is False for x in rows),
+          'unknown_samples':sum(x['stage_ok'] is None for x in rows),
+          'path_verified':all(x['path_verified'] for x in rows),'business_rejection_samples':sum(x['business_rejected'] for x in rows),
+          'region_rejected_samples':sum(x['business_error_kind']=='region_rejected' for x in rows),
+          'median_elapsed_ms':statistics.median(times) if times else None,'samples':rows}
+    result['path_identity_verified']=all(x['path_verified'] for x in result['paths'].values())
+    return {**result,'state':'insufficient_target_dial_evidence' if any(row['unknown_samples'] for row in result['paths'].values()) else 'observed'}

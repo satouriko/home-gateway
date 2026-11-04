@@ -1,0 +1,79 @@
+{
+  "collected": [],
+  "excluded": [
+    {
+      "name": "test_candidate10.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate11.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate12.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate13.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate13_snapshot_boundary.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate14.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate15_unprobeable_claim.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate3.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate6.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate7.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate8.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_candidate9.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_inspect_candidate.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_inspect_v16.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_inspect_v17.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_probe_cap.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_program_candidate5.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_program_worker.py",
+      "reason": "nonportable_test"
+    }
+  ],
+  "format": 1,
+  "verification": "not run during collection"
+}

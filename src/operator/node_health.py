@@ -39,7 +39,14 @@ def valid_incidents(document,now):
 
 
 def policy_id(policy):
-    return hashlib.sha256(json.dumps(policy.get('preferences',{}),sort_keys=True).encode()).hexdigest()[:16]
+    keys={'mode','preferred_label','preferred_keywords','excluded_keywords','allow_other_regions','allow_proxy_direct_fallback'}
+    values={k:v for k,v in policy.get('preferences',{}).items() if k in keys}
+    return hashlib.sha256(json.dumps(values,sort_keys=True).encode()).hexdigest()[:16]
+
+
+def legacy_policy_id(policy):
+    values={k:v for k,v in policy.get('preferences',{}).items() if k not in {'adaptive_routes','routing_strategy'}}
+    return hashlib.sha256(json.dumps(values,sort_keys=True).encode()).hexdigest()[:16]
 
 
 def event(at,region,attempts,policy):
@@ -50,18 +57,21 @@ def event(at,region,attempts,policy):
     failed=len(preferred)>=2 and not any(preferred)
     ident=hashlib.sha256(json.dumps([at,region,rows,policy_id(policy)]).encode()).hexdigest()[:20]
     return {'at':at,'id':ident,'incident_id':ident,'incident_started_at':at,'selected_region':region,'attempts':rows,
-            'preferred_failed':failed,'unavailable':region is None and bool(rows),'policy_id':policy_id(policy)}
+            'preferred_failed':failed,'unavailable':region is None and bool(rows),'policy_id':policy_id(policy),'legacy_policy_id':legacy_policy_id(policy)}
 
 
 def append(document,current,now):
     rows=valid_events(document,now)
     current=dict(current)
+    legacy=current.pop('legacy_policy_id',None)
+    history=valid_incidents(document,now)
+    for row in [*rows,*history]:
+        if legacy and row['policy_id']==legacy:row['policy_id']=current['policy_id']
     connected=rows and rows[-1]['policy_id']==current['policy_id'] and 0<=current['at']-rows[-1]['at']<=MAX_GAP
     if current['preferred_failed'] and connected and rows[-1]['preferred_failed']:
         current['incident_id']=rows[-1].get('incident_id',rows[-1]['id'])
         current['incident_started_at']=rows[-1].get('incident_started_at',rows[-1]['at'])
         current['unavailable_seen']=current['unavailable'] or rows[-1].get('unavailable_seen',rows[-1].get('unavailable',False))
-    history=valid_incidents(document,now)
     if not current['preferred_failed'] and connected and rows[-1]['preferred_failed']:
         last=rows[-1];start=last.get('incident_started_at',last['at'])
         if last.get('unavailable_seen',last.get('unavailable')) or last['at']-start>=120:
@@ -73,7 +83,8 @@ def summarize(document,policy,now):
     unknown={'state':'unknown','urgent':False,'review_due':False,'events':[],'fingerprint':None}
     if policy.get('preferences',{}).get('mode')=='direct':return {**unknown,'state':'not_used'}
     if not isinstance(document,dict):return unknown
-    rows=[r for r in valid_events(document,now) if r['policy_id']==policy_id(policy)]
+    compatible={policy_id(policy),legacy_policy_id(policy)}
+    rows=[r for r in valid_events(document,now) if r['policy_id'] in compatible]
     if not rows:return unknown
     last=rows[-1];active=0<=now-last['at']<=180
     segments=[];segment=[];previous=None
@@ -90,7 +101,7 @@ def summarize(document,policy,now):
     sustained=len(current)>=2 and current[-1]['at']-current[0].get('incident_started_at',current[0]['at'])>=120
     urgent=active and (last.get('unavailable') is True or sustained)
     state='unavailable' if active and last.get('unavailable') else 'preferred_degraded' if urgent else 'observing' if active and last.get('preferred_failed') else 'healthy' if active else 'stale'
-    history=[x for x in valid_incidents(document,now) if x['policy_id']==policy_id(policy)]
+    history=[x for x in valid_incidents(document,now) if x['policy_id'] in compatible]
     incident=current if urgent else significant[-1] if significant else []
     ident=incident[0].get('incident_id',incident[0]['id']) if incident else history[-1]['id'] if history else None
     return {'state':state,'urgent':bool(urgent),'review_due':bool((significant or history) and not urgent),'checked_at':last['at'],

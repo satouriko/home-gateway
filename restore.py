@@ -28,7 +28,8 @@ def verify(repository):
     if manifest.get('format') != 1: raise ValueError('unsupported snapshot format')
     extra = {'config/mihomo.template.json', 'preferences/network-policy.json',
              'preferences/audit-plan.json', 'snapshot/published/diagnostic-active.json',
-             'snapshot/published/tool-active.json', 'src/maintained/diagnostic.py', 'src/maintained/tool.py'}
+             'snapshot/published/tool-active.json', 'src/maintained/diagnostic.py', 'src/maintained/tool.py',
+             'snapshot/published/workflow-active.json', 'src/maintained/workflow.py', 'snapshot/maintained-tests.json'}
     files = {}
     for name, record in manifest['files'].items():
         allowed = name in backup.SOURCE_MAP or name in extra
@@ -40,6 +41,17 @@ def verify(repository):
             raise ValueError('snapshot content hash mismatch: ' + name)
         files[name] = data
     backup.scan(files)
+    if 'preferences/network-policy.json' in files:
+        backup.validate_public_preferences(json.loads(files['preferences/network-policy.json']).get('preferences', {}))
+    workflow = files.get('snapshot/published/workflow-active.json')
+    if workflow:
+        published = json.loads(workflow)
+        source = files.get('src/maintained/workflow.py')
+        if (source is None or not isinstance(published, dict) or type(published.get('active')) is not bool or
+                published.get('version') != hashlib.sha256(source).hexdigest()[:16]):
+            raise ValueError('workflow version integrity failed')
+        if 'src/maintained/workflow-default.py' not in files:
+            raise ValueError('workflow builtin missing from finite export')
     return manifest, files
 
 
@@ -106,6 +118,12 @@ def stage(repository, destination, credentials, uid=999):
             write('/var/lib/dsh/workspace/network-maintainer/' + candidate, data['source'].encode())
     skill = files.get('src/dsh/skill/SKILL.md')
     if skill: write('/var/lib/dsh/workspace/network-maintainer/skill/SKILL.md', skill)
+    if 'snapshot/published/workflow-active.json' in files:
+        published = json.loads(files['snapshot/published/workflow-active.json'])
+        source = files['src/maintained/workflow.py'].decode()
+        active = {'source': source, 'version': published['version'], 'tests': [], 'published_at': None} if published['active'] else None
+        write('/var/lib/net-gateway-agent/workflow-state.json', backup.encoded({'format': 1, 'active': active, 'previous': None}))
+        write('/var/lib/dsh/workspace/network-maintainer/programs/workflow.py', source.encode())
     if 'preferences/audit-plan.json' in files:
         plan = json.loads(files['preferences/audit-plan.json'])
         current = json.loads(files.get('snapshot/published/diagnostic-active.json', b'{}'))

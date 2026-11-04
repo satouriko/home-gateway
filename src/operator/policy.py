@@ -1,18 +1,33 @@
 """Validation boundary shared by local operator tools and offline recovery."""
 import ipaddress
 import re
+import json
 
-READS = {'status','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','context','audit_plan','native_status','native_inspection','overview','source_sync_notices'}
+READS = {'status','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','context','audit_plan','native_status','native_inspection','overview','source_sync_notices','incidents','incident_get','evidence_detail'}
 REPAIRS = {'recheck_nodes', 'refresh_subscription', 'restart_gateway', 'restore_gateway'}
-PROGRAMS = {'program_status','program_test','program_publish','tool_status','tool_test','tool_publish','tool_run','skill_status','skill_test','skill_publish'}
+PROGRAMS = {'program_status','program_test','program_publish','tool_status','tool_test','tool_publish','tool_run','skill_status','skill_test','skill_publish','workflow_status','workflow_test','workflow_publish'}
 POLICY = {'policy_test','policy_apply'}
-AUX={'maintenance_register','audit_plan_set','native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable','source_sync_notice_ack'}
+AUX={'maintenance_register','audit_plan_set','native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable','source_sync_notice_ack','incident_decide'}
+PUBLISHES={'program_publish','tool_publish','skill_publish','workflow_publish','policy_apply','audit_plan_set','audit_plan_enable'}
+SOURCE_OPERATIONS={'program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish','workflow_test','workflow_publish'}
+ROUTING={'route_status','route_get','route_source','route_requirement','route_evaluate','route_apply'}
+PUBLISHES.add('route_apply')
 
 def validate_request(request):
-    if not isinstance(request, dict) or request.get('operation') not in READS | REPAIRS | PROGRAMS | POLICY | AUX:
+    if not isinstance(request, dict) or request.get('operation') not in READS | REPAIRS | PROGRAMS | POLICY | AUX | ROUTING:
         raise ValueError('unknown operation')
     operation = request['operation']
-    allowed = {'operation','preferences','receipt'} if operation in POLICY else ({'operation', 'target'} if operation in ['probe','probe_compare'] else ({'operation','source'} if operation in ['program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish'] else ({'operation','request'} if operation=='tool_run' else {'operation'})))
+    allowed = {'operation','preferences','receipt'} if operation in POLICY else ({'operation', 'target'} if operation in ['probe','probe_compare'] else ({'operation','source'} if operation in SOURCE_OPERATIONS else ({'operation','request'} if operation=='tool_run' else {'operation'})))
+    if operation=='incident_get':allowed={'operation','id'}
+    if operation=='incident_decide':allowed={'operation','id','revision','decision','session_id'}
+    if operation=='evidence_detail':allowed={'operation','section','target','limit','snapshot_ref'}
+    if operation=='probe_compare':allowed.update(['endpoint','refresh'])
+    if operation=='route_get':allowed={'operation','evidence_ids'}
+    if operation=='route_status':allowed={'operation','target'}
+    if operation=='route_source':allowed={'operation','url'}
+    if operation=='route_requirement':allowed={'operation','target','path','source_ids','quotes','rationale','region_context','session_id'}
+    if operation=='route_evaluate':allowed={'operation','target','path','evidence_ids','business_requirement_evidence_ids'}
+    if operation=='route_apply':allowed={'operation','proposal'}
     if operation=='source_sync_notice_ack':allowed={'operation','request_id','revision','session_id','message_id'}
     if operation=='maintenance_register':allowed={'operation','session_id','kind'}
     if operation=='audit_plan_set':allowed={'operation','interval_hours','daily_budget','reason'}
@@ -25,7 +40,7 @@ def validate_request(request):
         if operation=='native_admit':allowed.update(['occurrence','task_prompt','execution_id'])
         if operation=='native_observe':allowed={'operation','task'}
     if operation in ['skill_test','skill_publish']:allowed.update(['deadline','maintenance_session'])
-    if operation in ['program_publish','tool_publish','skill_publish','policy_apply','audit_plan_set','audit_plan_enable']:allowed.add('session_id')
+    if operation in PUBLISHES:allowed.update(['session_id','commit_message'])
     if set(request) - allowed:
         raise ValueError('unexpected fields')
     result = {'operation': operation}
@@ -36,10 +51,44 @@ def validate_request(request):
         expected=f"gateway-source-sync-{request['request_id']}-{request['revision']}"
         if request.get('message_id')!=expected:raise ValueError('valid receipt message identity required')
         return {key:request[key] for key in allowed}
-    if operation in ['program_publish','tool_publish','skill_publish','policy_apply','audit_plan_set','audit_plan_enable'] and request.get('session_id'):
+    if operation in PUBLISHES and 'commit_message' in request:
+        from commit_messages import validate_commit_message
+        result['commit_message']=validate_commit_message(request['commit_message'])
+    if operation in PUBLISHES|{'incident_decide','route_requirement'} and request.get('session_id'):
         from source_sync import valid_session
         if not valid_session(request['session_id']):raise ValueError('valid originating session required')
         result['session_id']=request['session_id']
+    if operation in {'incident_get','incident_decide'}:
+        if not isinstance(request.get('id'),str) or not re.fullmatch(r'case-[a-f0-9]{20}',request['id']):raise ValueError('valid incident identity required')
+        result['id']=request['id']
+        if operation=='incident_decide':
+            if type(request.get('revision')) is not int or request['revision']<1 or not isinstance(request.get('decision'),dict) or not result.get('session_id'):raise ValueError('incident revision, decision and actor session required')
+            result.update(revision=request['revision'],decision=request['decision'])
+    if operation in ROUTING:
+        for key in ['evidence_ids','business_requirement_evidence_ids','source_ids']:
+            if key not in request:continue
+            values=request[key]
+            if not isinstance(values,list) or not 1<=len(values)<=8 or any(not isinstance(v,str) or not re.fullmatch(r'(?:cmp|req|src)_[a-f0-9]{32}',v) for v in values):raise ValueError('bounded stored evidence references required')
+            result[key]=values
+        for key in ['target','path','url','quotes','rationale','region_context','proposal']:
+            if key in request:result[key]=request[key]
+        if operation=='route_get' and not result.get('evidence_ids'):raise ValueError('evidence references required')
+        if operation=='route_source' and (not isinstance(result.get('url'),str) or not 1<=len(result['url'])<=2048):raise ValueError('bounded public source URL required')
+        if operation=='route_requirement':
+            if not result.get('session_id') or not result.get('source_ids') or not isinstance(result.get('quotes'),list) or not 1<=len(result['quotes'])<=8:raise ValueError('actor, collected source and exact quotations required')
+            if not isinstance(result.get('rationale'),str) or not 12<=len(result['rationale'])<=2000 or not isinstance(result.get('region_context'),str) or not 2<=len(result['region_context'])<=300:raise ValueError('bounded public source interpretation required')
+        if operation in ['route_evaluate','route_requirement']:
+            if result.get('path') not in ['direct','proxy'] or not isinstance(result.get('target'),str) or not re.fullmatch(r'(?:[a-z0-9-]+\.)+[a-z]{2,63}',result['target']):raise ValueError('exact public domain and path required')
+        if operation=='route_status' and result.get('target') is not None and (not isinstance(result['target'],str) or not re.fullmatch(r'(?:[a-z0-9-]+\.)+[a-z]{2,63}',result['target'])):raise ValueError('exact public domain required')
+        if operation=='route_apply' and (not isinstance(result.get('proposal'),dict) or len(json.dumps(result['proposal']))>4096):raise ValueError('bounded proposal required')
+    if operation=='evidence_detail':
+        sections={'diagnosis','checks','observations','business_observations','incidents','history','node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow'}
+        if request.get('section') not in sections or type(request.get('limit',16)) is not int or not 1<=request.get('limit',16)<=32:raise ValueError('bounded known evidence section required')
+        target=request.get('target')
+        if target is not None and (not isinstance(target,str) or not 1<=len(target)<=253 or not re.fullmatch(r'[a-zA-Z0-9_.:-]+',target)):raise ValueError('valid evidence target required')
+        ref=request.get('snapshot_ref')
+        if ref is not None and (not isinstance(ref,str) or not re.fullmatch(r'[a-f0-9]{20}',ref)):raise ValueError('valid evidence snapshot reference required')
+        result.update(section=request['section'],target=target,limit=request.get('limit',16),snapshot_ref=ref)
     if operation=='audit_plan_enable':result['receipt']=request.get('receipt')
     if operation=='native_observe':
         task=request.get('task')
@@ -82,7 +131,7 @@ def validate_request(request):
         if not isinstance(request.get('preferences'),dict):raise ValueError('preference patch object required')
         result['preferences']=request['preferences']
         result['receipt']=request.get('receipt')
-    if operation in ['program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish']:
+    if operation in SOURCE_OPERATIONS:
         source=request.get('source')
         if not isinstance(source,str) or not 1<=len(source.encode())<=24000:raise ValueError('bounded source required')
         result['source']=source
@@ -104,6 +153,14 @@ def validate_request(request):
         if not re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}', target):
             raise ValueError('target must be a DNS hostname, not a URL or command')
         result['target'] = target
+        if operation=='probe_compare':
+            endpoint=request.get('endpoint')
+            if endpoint is not None:
+                if not isinstance(endpoint,dict) or set(endpoint)-{'network','port','application_protocol'} or endpoint.get('network') not in ['tcp','udp'] or type(endpoint.get('port')) is not int or not 1<=endpoint['port']<=65535 or endpoint.get('application_protocol') not in ['tcp','tls','http','https','quic','unknown',None]:raise ValueError('actual endpoint network, port and protocol required')
+                result['endpoint']=endpoint
+            if 'refresh' in request:
+                if type(request['refresh']) is not bool:raise ValueError('boolean comparison refresh required')
+                result['refresh']=request['refresh']
     return result
 
 INSTALL_POLICY = {'mode':'rule','proxy_chain':['US_AUTO','OTHER_AUTO'],

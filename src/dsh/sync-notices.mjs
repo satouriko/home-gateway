@@ -10,7 +10,7 @@ const VERSION=/^[a-f0-9]{16,64}$/;
 const COMMIT=/^[a-f0-9]{40,64}$/;
 const REPOSITORY=/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const LABELS={program_publish:'巡检程序',tool_publish:'运维工具',skill_publish:'运维方法',policy_apply:'网络偏好',
-  audit_plan_set:'审计计划',audit_plan_enable:'审计计划',native_observe:'任务设置'};
+  workflow_publish:'运维策略',route_apply:'定向分流规则',audit_plan_set:'审计计划',audit_plan_enable:'审计计划',native_observe:'任务设置'};
 const STATUSES=new Set(['pending','held','failed','success','superseded']);
 
 function validReceipt(r) {

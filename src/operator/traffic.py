@@ -15,6 +15,7 @@ BASELINE_SECONDS = 5 * 60
 MAX_DOMAINS = 256
 MAX_DEVICES = 128
 MAX_CONNECTIONS = 4096
+MAX_ENDPOINTS = 512
 MAX_FAILURE_EVENTS = 1024
 MAX_INPUT_ROWS = 16384
 RECENT_SECONDS = 6 * 3600
@@ -105,6 +106,8 @@ def _prune(state, now):
         state = {'version': 1, 'domains': {}, 'devices': {}, 'connections': {}, 'failure_events': {},
                  'snapshot_count': 0, 'dropped_observations': 0}
     cutoff = now - RETENTION_SECONDS
+    endpoints=state.setdefault('endpoints',{})
+    state['endpoints']={k:v for k,v in endpoints.items() if isinstance(v,dict) and v.get('domain') in state['domains'] and cutoff<=v.get('last_seen',0)<=now}
     oldest_hour = int(now // 3600) - 71
     for name, limit in (('domains', MAX_DOMAINS), ('devices', MAX_DEVICES)):
         records = state[name]
@@ -193,7 +196,7 @@ def _failure_update(state, failures, now, local_addresses):
             continue
         domain = hostname(failure.get('domain', failure.get('host')))
         source = _source(failure.get('sourceIP'), local_addresses)
-        at = _time(failure.get('at', now))
+        at = _time(failure.get('event_at',failure.get('at', now)))
         if not domain or not source or at < now - RETENTION_SECONDS or at > now + 5:
             continue
         category = failure.get('error_category', failure.get('kind', 'other'))
@@ -215,6 +218,31 @@ def _failure_update(state, failures, now, local_addresses):
         record['failure_times'] = sorted(set(record['failure_times'] + [at]))[-16:]
         if category not in record['error_categories']:
             record['error_categories'].append(category)
+        _endpoint_update(state,domain,failure,failure.get('path','unknown'),at,failure=True)
+
+
+def _endpoint_update(state,domain,metadata,path,now,upload=0,download=0,connections=0,failure=False):
+    network=metadata.get('network');port=metadata.get('destinationPort',metadata.get('port'))
+    if network not in ('tcp','udp') or type(port) is bool:return
+    if isinstance(port,str) and port.isascii() and port.isdigit():port=int(port)
+    if type(port) is not int or not 1<=port<=65535:return
+    protocol=metadata.get('application_protocol','unknown')
+    if protocol not in ('tcp','udp','tls','http','https','quic','dns','unknown'):protocol='unknown'
+    path=path if path in ('direct','proxy') else 'unknown'
+    records=state.setdefault('endpoints',{});key=_digest(domain,network,port,protocol)
+    if key not in records:
+        if len(records)>=MAX_ENDPOINTS:
+            oldest=min(records,key=lambda k:(bool(records[k].get('last_failure_at') and now-records[k]['last_failure_at']<1800),records[k]['last_seen']))
+            del records[oldest];state['endpoint_evictions']=state.get('endpoint_evictions',0)+1
+        records[key]={'domain':domain,'network':network,'port':port,'application_protocol':protocol,'first_seen':now,'last_seen':now,'last_failure_at':None,'paths':{}}
+    record=records[key];record['first_seen']=min(record['first_seen'],now);record['last_seen']=max(record['last_seen'],now)
+    if failure:record['last_failure_at']=max(record.get('last_failure_at') or 0,now)
+    route=record['paths'].setdefault(path,{'first_seen':now,'last_seen':now,'last_failure_at':None,'failure_count':0,'connections_seen':0,'observed_bytes_lower_bound':0})
+    route['first_seen']=min(route['first_seen'],now)
+    route['last_seen']=max(route['last_seen'],now)
+    route['observed_bytes_lower_bound']=min(_MAX_COUNTER,route['observed_bytes_lower_bound']+upload+download)
+    route['connections_seen']=min(_MAX_COUNTER,route['connections_seen']+connections)
+    if failure:route.update(last_failure_at=max(route.get('last_failure_at') or 0,now),failure_count=min(_MAX_COUNTER,route['failure_count']+1))
 
 
 def update(state, connections, now, local_addresses, failures=None):
@@ -264,6 +292,9 @@ def update(state, connections, now, local_addresses, failures=None):
         down = download - previous['download'] if previous and download >= previous['download'] else 0
         _increment(record, now, upload=up, download=down, connections=int(previous is None))
         _increment(device, now, upload=up, download=down, connections=int(previous is None))
+        chains=connection.get('chains',[])
+        path='direct' if isinstance(chains,list) and 'DIRECT' in chains else 'proxy' if isinstance(chains,list) and chains and not any(x in chains for x in ['REJECT','PASS']) else 'unknown'
+        _endpoint_update(state,domain,metadata,path,now,up,down,int(previous is None))
         state['connections'][key] = {'domain': domain, 'source': source, 'upload': upload, 'download': download, 'last_seen': now}
     if len(rows) > MAX_INPUT_ROWS:
         state['dropped_observations'] += len(rows) - MAX_INPUT_ROWS
@@ -290,11 +321,11 @@ def _totals(record, now):
     return totals
 
 
-def _domain_summary(domain, record, now):
+def _domain_summary(domain, record, now,endpoints=None):
     totals = _totals(record, now)
     failure_times = _recent_failure_times(record, now)
     recurring = len(failure_times) >= 3 and max(failure_times) - min(failure_times) >= 60
-    return {'domain': domain, 'last_seen': record['last_seen'], 'device_count': len(record['devices']),
+    return {'domain': domain, 'last_seen': record['last_seen'],'last_failure_at':max(record.get('failure_times',[]),default=None),'endpoints':endpoints or [], 'device_count': len(record['devices']),
             'device_addresses': list(record['devices']), 'device_address_limit': 16,
             'observed_upload_bytes': totals['upload'], 'observed_download_bytes': totals['download'],
             'observed_bytes_lower_bound': totals['upload'] + totals['download'],
@@ -306,7 +337,10 @@ def _domain_summary(domain, record, now):
 def _domains(state, now):
     if not isinstance(state, dict) or state.get('version') != 1:
         return []
-    records = [_domain_summary(name, record, now) for name, record in state['domains'].items()
+    endpoint_index={}
+    for endpoint in state.get('endpoints',{}).values():
+        endpoint_index.setdefault(endpoint['domain'],[]).append({**endpoint,'counter_scope':'since_retained_endpoint_first_seen','application_verified':False})
+    records = [_domain_summary(name, record, now,endpoint_index.get(name)) for name, record in state['domains'].items()
                if now - RETENTION_SECONDS <= record['last_seen'] <= now]
     return sorted(records, key=lambda item: (item['recurring_failure'], item['failure_count'],
                                             item['observed_bytes_lower_bound'], item['last_seen'], item['domain']), reverse=True)

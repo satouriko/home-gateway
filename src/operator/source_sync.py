@@ -16,6 +16,7 @@ import re
 import tempfile
 import time
 import uuid
+from commit_messages import ARTIFACT_PATHS, validate_commit_message
 
 
 SESSION = re.compile(r'session-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
@@ -24,16 +25,17 @@ VERSION = re.compile(r'[a-f0-9]{16,64}')
 COMMIT = re.compile(r'[a-f0-9]{40,64}')
 REPOSITORY = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 REASONS = {'program_publish', 'tool_publish', 'skill_publish', 'policy_apply',
-           'audit_plan_set', 'audit_plan_enable', 'native_observe'}
+           'audit_plan_set', 'audit_plan_enable', 'native_observe', 'workflow_publish', 'route_apply'}
 ERROR_CODES = {'push_rejected', 'sync_failed', 'unexpected_branch',
                'uncommitted_repository_changes', 'diverged_history_requires_review',
                'remote_program_changes_require_deployment', 'invalid_publication_request',
                'publication_snapshot_mismatch', 'snapshot_not_verified',
+               'maintained_tests_failed', 'maintained_test_sandbox_unavailable',
                'CalledProcessError', 'TimeoutExpired', 'OSError', 'ValueError'}
 TERMINAL = {'success', 'superseded'}
 MAX_BYTES = 512 * 1024
 ARTIFACT_GROUP = {'audit_plan_set': 'audit-plan', 'audit_plan_enable': 'audit-plan',
-                  'native_observe': 'audit-plan'}
+                  'native_observe': 'audit-plan', 'policy_apply': 'network-policy', 'route_apply': 'network-policy'}
 
 
 def valid_session(value):
@@ -42,14 +44,8 @@ def valid_session(value):
 
 def snapshot_versions(files):
     """Version only the bytes in the exported snapshot, never live mutable state."""
-    artifacts = {'program_publish': 'src/maintained/diagnostic.py',
-                 'tool_publish': 'src/maintained/tool.py', 'skill_publish': 'src/dsh/skill/SKILL.md',
-                 'policy_apply': 'preferences/network-policy.json',
-                 'audit_plan_set': 'preferences/audit-plan.json',
-                 'audit_plan_enable': 'preferences/audit-plan.json',
-                 'native_observe': 'preferences/audit-plan.json'}
     return {reason: hashlib.sha256(files[name]).hexdigest()[:16]
-            for reason, name in artifacts.items() if name in files}
+            for reason, name in ARTIFACT_PATHS.items() if name in files}
 
 
 def _matches(pattern, value):
@@ -58,6 +54,35 @@ def _matches(pattern, value):
 
 def _notice_id(record):
     return f"gateway-source-sync-{record['id']}-{record['revision']}"
+
+
+def validate_request_descriptor(request, forbidden=()):
+    """Accept legacy id-only requests and bounded version-scoped descriptions."""
+    if (not isinstance(request, dict) or not _matches(IDENT, request.get('id')) or
+            len(json.dumps(request, ensure_ascii=False).encode()) > MAX_BYTES):
+        raise ValueError('invalid publication request')
+    if 'publications' not in request:
+        return {'id': request['id']}
+    publications = request['publications']
+    if request.get('format') != 1 or not isinstance(publications, list) or len(publications) > 512:
+        raise ValueError('invalid publication request')
+    cleaned = []
+    previous = 0
+    seen = set()
+    for record in publications:
+        if (not isinstance(record, dict) or not _matches(IDENT, record.get('id')) or
+                record['id'] in seen or not isinstance(record.get('reason'), str) or
+                record['reason'] not in REASONS or 'version' not in record or
+                type(record.get('sequence')) is not int or record['sequence'] <= previous or
+                (record.get('version') is not None and not _matches(VERSION, record['version']))):
+            raise ValueError('invalid publication request')
+        previous = record['sequence']
+        seen.add(record['id'])
+        item = {key: record[key] for key in ('id', 'sequence', 'reason', 'version')}
+        if record.get('commit_message') is not None:
+            item['commit_message'] = validate_commit_message(record['commit_message'], forbidden)
+        cleaned.append(item)
+    return {'id': request['id'], 'format': 1, 'publications': cleaned}
 
 
 class SourceSyncRegistry:
@@ -123,13 +148,18 @@ class SourceSyncRegistry:
             raise ValueError('invalid receipt timestamp')
         return value
 
-    def register(self, reason, session_id=None, version=None, request_id=None, now=None):
+    def register(self, reason, session_id=None, version=None, request_id=None, now=None,
+                 commit_message=None, forbidden=()):
         if reason not in REASONS:
             raise ValueError('invalid publication reason')
         if session_id is not None and not valid_session(session_id):
             raise ValueError('invalid originating session')
         if version is not None and not _matches(VERSION, version):
             raise ValueError('invalid publication version')
+        if commit_message is not None:
+            commit_message = validate_commit_message(commit_message, forbidden)
+            if version is None:
+                raise ValueError('commit message requires publication version')
         request_id = uuid.uuid4().hex if request_id is None else request_id
         if not _matches(IDENT, request_id):
             raise ValueError('invalid publication request')
@@ -137,7 +167,7 @@ class SourceSyncRegistry:
         with self._locked(mutate=True) as state:
             for record in state['records']:
                 if record['id'] == request_id:
-                    if (record['reason'], record['session_id'], record['version']) != (reason, session_id, version):
+                    if (record['reason'], record['session_id'], record['version'], record.get('commit_message')) != (reason, session_id, version, commit_message):
                         raise ValueError('publication request identity conflict')
                     return copy.deepcopy(record)
             removable = [r for r in state['records'] if r['status'] in TERMINAL and
@@ -151,8 +181,21 @@ class SourceSyncRegistry:
                       'artifact': reason, 'version': version, 'session_id': session_id,
                       'status': 'pending', 'revision': 1, 'delivered_revision': 0,
                       'requested_at': timestamp, 'updated_at': timestamp}
+            if commit_message is not None:
+                record['commit_message'] = commit_message
             state['records'].append(record)
             return copy.deepcopy(record)
+
+    def request_descriptor(self, request_id=None):
+        """Copy pending publication metadata for the unprivileged backup worker."""
+        with self._locked() as state:
+            cutoff = next((r for r in reversed(state['records'])
+                           if request_id is None or r['id'] == request_id), None)
+            if cutoff is None:
+                raise ValueError('invalid publication request')
+            publications = [{key: r[key] for key in ('id', 'sequence', 'reason', 'version', 'commit_message') if key in r}
+                            for r in state['records'] if r['sequence'] <= cutoff['sequence'] and r['status'] not in TERMINAL]
+            return validate_request_descriptor({'id': cutoff['id'], 'format': 1, 'publications': publications})
 
     @staticmethod
     def _transition(record, status, now, **details):

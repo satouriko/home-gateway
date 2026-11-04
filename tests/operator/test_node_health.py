@@ -1,8 +1,26 @@
 import unittest
+import hashlib
+import json
 import node_health as n
 
 
 class NodeHealthTests(unittest.TestCase):
+    def test_routing_strategy_and_exact_rules_do_not_reset_node_pool_identity(self):
+        original={'preferences':{'mode':'rule','preferred_keywords':['美国'],'allow_other_regions':True}}
+        changed={'preferences':{**original['preferences'],'adaptive_routes':{'example.com':'proxy'},'routing_strategy':{'allow_latency_only':False},'proxy_domains':['other.example.com']}}
+        self.assertEqual(n.policy_id(original),n.policy_id(changed))
+        changed['preferences']['preferred_keywords']=['日本']
+        self.assertNotEqual(n.policy_id(original),n.policy_id(changed))
+
+    def test_legacy_pool_incident_survives_first_new_format_sample(self):
+        attempts=[{'region':'US_AUTO','ok':False},{'region':'US_AUTO','ok':False}]
+        first=self.event(self.now-130,None,attempts)
+        first['policy_id']=hashlib.sha256(json.dumps(self.policy['preferences'],sort_keys=True).encode()).hexdigest()[:16]
+        before=first['incident_id']
+        document=n.append({'recent_events':[first]},self.event(self.now,None,attempts),self.now)
+        result=n.summarize(document,self.policy,self.now)
+        self.assertTrue(result['urgent']);self.assertEqual(result['fingerprint'],'node-pool:'+before)
+
     def setUp(self):
         self.policy={'preferences':{'mode':'rule','allow_other_regions':True}}
         self.now=1800000000

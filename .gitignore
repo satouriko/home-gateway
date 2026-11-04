@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .export-*/
+.export-commit-*
 .env
 credentials*
 secrets*

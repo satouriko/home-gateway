@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
@@ -48,6 +49,18 @@ class NativeTests(unittest.TestCase):
     def test_unresolved_fault_is_handled_by_emergency_worker(self):
         self.diagnosis['checks']['proxy_https']={'ok':False}
         self.assertFalse(self.admit()['admitted'])
+    def test_due_native_audit_keeps_0542_cadence_after_an_unrelated_0109_emergency(self):
+        from patrol import fault_signature
+        stamp=lambda value:datetime.fromisoformat('2026-11-04T'+value+'+00:00').timestamp()
+        self.now=stamp('05:42:00');self.state.update(checked_at=self.now,last_ai_at=stamp('01:09:00'),last_ai_kind='anomaly',
+            last_routine_ai_at=self.now-21600,last_independent_audit_at=self.now-21600)
+        self.diagnosis['checks']['proxy_https']={'ok':False}
+        self.state['last_ai_fingerprint']=fault_signature(self.diagnosis)
+        self.state['maintenance']={'cases':[],'workflow':{'result':{'wake':'none'}}}
+        self.ledger['observed_task']={'kind':'every','everySeconds':21600};self.write()
+        lease=native.admit('session-test',self.state,self.now,occurrence='schedule-test:2026-11-04T05:42:00Z')
+        self.assertTrue(lease['admitted']);self.assertEqual(lease['kind'],'independent_audit')
+        self.assertIn('maintenance',lease['context'])
     def test_completion_requires_current_lease_and_cannot_renew_or_rewrite_expiry(self):
         lease=self.admit();self.assertFalse(native.finish('session-test','bad','completed',self.now+1)['updated'])
         self.assertTrue(native.finish('session-test',lease['id'],'completed',self.now+30)['updated'])
@@ -78,6 +91,19 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.admit()['admitted'])
         plan=json.loads((self.path.parent/'audit-plan.json').read_text())
         self.assertFalse(plan['enabled']);self.assertEqual(plan['schedule']['prompt'],definition['prompt'])
+    def test_observed_schedule_returns_its_immutable_export_version_before_a_later_writer(self):
+        import patrol
+        task={'id':'schedule-test','kind':'every','title':'Native title','prompt':'Native instructions','everySeconds':21600,'status':'active'}
+        captured=[];original=patrol.save
+        def racing_write(path,value,group=None):
+            captured.append(json.loads(json.dumps(value)));original(path,value,group)
+            changed={**value,'daily_budget':9};path.write_text(json.dumps(changed))
+        with patch.object(patrol,'save',side_effect=racing_write):result=native.observe(task)
+        public={key:captured[0][key] for key in ['interval_hours','daily_budget','enabled','schedule']}
+        expected=hashlib.sha256((json.dumps(public,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()).hexdigest()[:16]
+        self.assertEqual(result['source_sync_version'],expected)
+        self.assertEqual(json.loads((self.path.parent/'audit-plan.json').read_text())['daily_budget'],9)
+        self.assertNotIn('source_sync_version',native.observe(task))
     def test_native_edits_change_the_actual_interval_and_duplicate_occurrences_are_free(self):
         self.ledger['observed_task']={'kind':'every','everySeconds':21600};self.write()
         self.assertFalse(self.admit()['admitted'])

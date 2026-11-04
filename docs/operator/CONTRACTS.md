@@ -6,7 +6,9 @@
 
 gateway_policy 的 get 查询有效目标；test 用 preferences JSON 补丁验证候选；apply 才应用。apply 必须来源于本轮网页聊天中用户明确提出的新目标，后台维护进程没有此权限。发布前校验、90秒内实际验收，未通过由独立程序恢复此前配置和策略这一整对检查点。
 
-字段：mode（rule/direct/global）；preferred_label、preferred_keywords（节点名字中的字面关键词数组，最多8项）；allow_other_regions、allow_proxy_direct_fallback、mainland_direct（布尔）；direct_domains、proxy_domains（域名后缀数组，各最多100项）；excluded_keywords（故障节点名字关键词数组）。只修改用户本次要求的字段。工具返回实际生效的策略，不能只改文档或skill。地区池的内部US_AUTO/us标识是历史标识，以preferences内容确定真实地区。
+字段：mode（rule/direct/global）；preferred_label、preferred_keywords（节点名字中的字面关键词数组，最多8项）；allow_other_regions、allow_proxy_direct_fallback、mainland_direct（布尔）；direct_domains、proxy_domains（域名后缀数组，各最多100项）；excluded_keywords（故障节点名字关键词数组）；adaptive_routes（精确域名到direct/proxy的映射）；routing_strategy（自动调整所需依据的布尔条件）。只修改用户本次要求的字段。工具返回实际生效的策略，不能只改文档或skill。地区池的内部US_AUTO/us标识是历史标识，以preferences内容确定真实地区。
+
+routing_strategy 的 require_degraded_current、require_public_service_basis、require_route_conflict、allow_latency_only 是当前用户目标的一部分，不是永久方法常量。每轮读取有效值；后台不能自行放宽。显式后缀规则优先于自动精确规则，独立控制域名受保护；改变策略或规则会改变策略版本，使旧证据失效。
 
 ## 费用与调度
 
@@ -74,7 +76,9 @@ gateway_audit_plan 可查询或调整审计间隔、常规任务日预算、选�
 
 gateway(traffic_status) 是最近72小时的私有客户端观测，包含设备IP、域名、规则/链和保守的字节增量。2秒快照和告警流会遗漏短连接及不可观测的设备/应用，不是完整浏览历史；观测间断会标记过期。设备IP不等于人员身份。Pi控制和探测流量排除在外，不得把手选的探测域名称为家人在用的域名。
 
-gateway(probe_compare,target=域名) 在独立受保护引擎中固定 DIRECT 与实际选中节点，三次采样分别返回 transport_ok/http_ok/business_ok、路径身份和验收范围。不修改家庭转发，不以出口IP猜路径。只请求公共域名HTTPS根路径，不跟随跳转；通用首页200没有内容依据时仍未完成业务验收，403/429等明确标为阻断。真实客户端错误不会被一次自测成功清除。
+gateway(probe_compare,target=域名,endpoint=JSON) 在独立受保护引擎中固定 DIRECT 与实际选中节点，按实际观察的network/port/application_protocol验证TCP、TLS或HTTP阶段；未给端点时才使用兼容HTTPS根路径。UDP/QUIC等未支持端点明确返回未知，不偷换成443。三次采样分别返回相关阶段、业务未知/拒绝、路径身份和验收范围。通用首页200没有内容依据时仍未完成业务验收，403/429也不能笼统认定节点坏了。真实客户端错误不会被一次自测成功清除。
+
+比较返回comparison_id与持久evidence_id。缓存命中复用同一轮和当时的正常对照，不构成新证据；refresh请求新轮也受最小间隔保护。实际网关规则另用自己创建的socket在实时连接中归属，不能凭出口IP或其他用户连接推断。控制探测与用户业务的适用范围始终分开。
 
 巡检程序会基于真实域名定向复测，默认最多每10分钟一个目标、同域名至少30分钟。最近30分钟内三个跨至少一分钟的客户端拨号错误才形成反复故障证据；旧错误不会永久触发。后台常规检查不调用模型，新故障去重后立即交给AI，独立审计遵循当前预算。长期缺口仍需工程改进，不能以固定站点探测冒充覆盖。
 
@@ -88,3 +92,29 @@ gateway(probe_compare,target=域名) 在独立受保护引擎中固定 DIRECT �
 原生自动化的到期时钟使用 scheduled occurrence，模型实际启动时间只参与预算、最小间隔和期限。刚到期的任务不会被子秒调度差误跳过。最近一次因“未到期”跳过的任务，修正后可通过原生一次性补跑重用同一个执行ID和计划时间，保留原跳过信息；不修改用户任务内容或下次时间，也不生成重复模型执行。
 
 后台任务通过 headless 原生标准输入传递 UTF-8 指令和观测，相同的 diagnosis/last_diagnosis 只发送一份，不受系统单个命令行参数长度限制。启动异常、执行超时、非零退出与缺失最终结果均保存明确失败摘要；已有工具或模型的部分输出不等于任务完成。先回写原生执行结果，再登记独立会话，避免网页登记延迟影响执行期限。后台报告保留有限失败类别、系统错误码和原生回执结果，不转储原始提供商 stderr。
+
+## 事件处理与实际运维策略
+
+gateway_incidents(list/get/decide) 维护跨新会话的事件。每项有稳定id、revision、事实、历史、priority、status、reason、evidence、next_review_at。decide使用刚读到的revision，证据变动会拒绝旧决定。status为open/working/verifying/blocked/closed，priority为urgent/normal，两者独立。
+
+decide的decision JSON必须有reason、1至8个证据引用、未来Unix秒next_review_at。closed另需outcome=fixed/not_a_problem/no_route_remedy/external_dependency；fixed必须已有current_failure=false及verified_recovery=true的真实观测，不允许关闭复发检测。其他结论不代表业务恢复。urgent处理中/验证中/阻塞的复查不超过15分钟；未到有效租约不重复唤醒，到期、修复失败或重要新证据继续接管。正常路径健康统计不受旧业务事件污染。容量和文件损坏是明确维护故障，待处理证据不会静默丢弃。
+
+gateway_workflow(status/test/publish) 维护实际巡检的纯函数inspect(snapshot)，不同于只给建议的gateway_program。snapshot含schema_version=1、now、path_health={hard_faults,checks}、incidents（含requires_attention）、observations、routing（含当前preferences/routing_strategy）、audit。返回且仅返回summary、wake=none/routine/urgent、incident_ids、probe_domains、route_candidates、next_check_seconds。最多16个事件、各3个域名，检查建议30至900秒；实际采样受宿主定时器节奏限制。新的紧急关注及硬故障不能被策略抹去。坏代码回退前版，输入契约异常保留好版本并报维护故障。
+
+候选位置从实时上下文sources.workflow_source读取；源码、有限测试、有效版本和前版由发布器持久保存。独立builtin不会被AI活跃源码覆盖；它不是用户可变目标的存放处。
+
+## 公开依据与精确分流
+
+gateway_routing(status/get/collect/requirement/evaluate/apply) 是独立受保护接口。status可按target域名查已有轻量引用，get按ID读取细节。先自主用原生web_search/web_fetch选取公开业务或地区资料，collect用无认证/参数的公开HTTPS URL取得真实来源收据；不接收模型自称已验证的正文。
+
+requirement传精确target、所需path、source_ids、quotes=[{source_id,quote}]、rationale、region_context。程序核验真实来源、逐字引用、范围和时效；业务解释仍是维护者的责任，不等于程序证明语义真伪。来源/比较/业务依据是私有有界证据，不同步公开仓库。
+
+evaluate使用独立比较evidence_ids和business_requirement_evidence_ids，按当时有效routing_strategy判断。当前实现要求同端点、政策/节点/DNS/配置身份以及真实客户端故障证据；正常对照由root采集，不接模型布尔。返回no_change/investigate/no_route_remedy/apply，前三者不会改变网络。apply只接受evaluate的proposal，锁内重读/CAS和重新评估，派生精确规则，持久装置回退，再热加载、实际规则/端点验证和正常对照；只有验证通过才提交配置与策略这一对检查点。不会给代理组添加静默直连兜底；传输阶段验证仍不冒充真实应用验收。
+
+## 证据体积、事实与发布说明
+
+起始与每步系统上下文只给语义摘要，同时保留失败、正常对照、处理进度及覆盖缺口。gateway_evidence按section/target/limit展开原始数据，snapshot_ref比较版本；requested_snapshot_matches=false时必须重新核对，不能无提示混用。模型任务报告记录原生tokenUsage已持久化总数、工具/处置/发布尝试，未取得用量时标为未知，不推算免费或声称已经修好。NRestarts只表示服务管理器的自动重启计数；生命周期记录、覆盖时段、无线PHY速率和吞吐分别表述，无法证明历史完整时明确未知。
+
+publish/apply/set在现有模型轮次中提供commit_message。格式为中文Conventional Commit标题、空行、技术背景段落、按模块分组的行为/文档/测试，最后“验证：”实际结果。发布前在会话展示；不放凭据或私人日志。格式或敏感内容不合格会在改正式文件前拒绝。同步按实际导出版本/暂存文件匹配说明；已替代版本的文字不能套到新文件，也不会额外花一次AI调用写提交。
+
+可公开维护测试以首8行内“# gateway-public-test: 1”标记，从Path(__file__).resolve().parents[2]定位src/maintained和src/operator，只使用公开源码与合成样本。不能依赖私人candidate路径、凭据或生产网络。有限导出会在无主机数据/网络、受限CPU/内存/输出的沙箱执行实际导出字节，失败不提交。旧的不可移植测试给出明确排除收据，不冒充通过；可用回归已转为当前公开源码的实际验收测试。

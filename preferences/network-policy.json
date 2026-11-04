@@ -1,12 +1,17 @@
 {
-  "allow_proxy_direct_fallback": false,
   "default_rule": "MATCH,PROXY",
-  "mainland_direct": true,
   "mode": "rule",
+  "pool_aliases": {
+    "OTHER_AUTO": "other pool",
+    "US_AUTO": "preferred pool (identifier is historical, not a country assertion)"
+  },
   "preferences": {
+    "adaptive_routes": {},
     "allow_other_regions": true,
     "allow_proxy_direct_fallback": false,
-    "direct_domains": [],
+    "direct_domains": [
+      "deepseek.com"
+    ],
     "excluded_keywords": null,
     "mainland_direct": true,
     "mode": "rule",
@@ -19,9 +24,15 @@
       "US"
     ],
     "preferred_label": "美国",
-    "proxy_domains": []
+    "proxy_domains": [],
+    "routing_strategy": {
+      "allow_latency_only": false,
+      "require_degraded_current": true,
+      "require_public_service_basis": true,
+      "require_route_conflict": true
+    }
   },
-  "preferred_region": "US",
+  "preferred_label": "美国",
   "proxy_chain": [
     "US_AUTO",
     "OTHER_AUTO"
@@ -30,5 +41,6 @@
     "OTHER_AUTO": "other",
     "US_AUTO": "us"
   },
-  "scope": "user-approved household configuration"
+  "scope": "user-approved household preferences",
+  "version": "4636233ad1f20e4e"
 }

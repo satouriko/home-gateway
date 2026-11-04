@@ -6,6 +6,7 @@ call. Human chat and the independent emergency worker do not use this gate.
 import contextlib
 from datetime import datetime
 import fcntl
+import hashlib
 import json
 import os
 import grp
@@ -182,7 +183,7 @@ def admit(session_id,state,now=None,occurrence=None,execution_id=None):
         ledger['last_gate']={'at':now,'session_id':session_id,'admitted':True};
         if occurrence:ledger['occurrences']=[*ledger.get('occurrences',[]),occurrence][-128:]
         save(ledger)
-        context={k:state.get(k) for k in ['last_diagnosis','diagnostic_program','audit_rollup','review_request']}
+        context={k:state.get(k) for k in ['last_diagnosis','diagnostic_program','audit_rollup','review_request','maintenance']}
         context['history']=state.get('history',[])[-16:]
         context.update(maintenance_trigger=job['kind'],urgent=False,pricing=clock)
         context['review_request']=effective.get('review_request')
@@ -274,12 +275,15 @@ def observe(task):
     if task and task.get('kind')=='at':definition['scheduledAt']=task['scheduledAt']
     active=task is not None and task.get('status','active')=='active'
     changed=plan.get('enabled',True)!=active or plan.get('schedule')!=definition
+    result={'enabled':ledger['enabled'],'preference_changed':changed}
     if changed:
         plan.update(enabled=active,schedule=definition)
         if task and task.get('kind')=='every':plan['interval_hours']=task['everySeconds']/3600
         from patrol import save as save_state
         save_state(plan_path,plan)
-    return {'enabled':ledger['enabled'],'preference_changed':changed}
+        public={key:plan[key] for key in ['interval_hours','daily_budget','enabled','schedule'] if key in plan}
+        result['source_sync_version']=hashlib.sha256((json.dumps(public,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()).hexdigest()[:16]
+    return result
 
 
 def dispatch_job(lease,task_prompt=None,cancelled=lambda:False):

@@ -26,13 +26,17 @@
         "https://dns.alidns.com/dns-query",
         "https://doh.pub/dns-query"
       ],
-      "geosite:cn,private": [
+      "geosite:cn": [
         "https://dns.alidns.com/dns-query",
         "https://doh.pub/dns-query"
       ],
       "geosite:geolocation-!cn": [
         "https://1.1.1.1/dns-query#PROXY",
         "https://8.8.8.8/dns-query#PROXY"
+      ],
+      "geosite:private": [
+        "https://dns.alidns.com/dns-query",
+        "https://doh.pub/dns-query"
       ],
       "rule-set:proxy-domains": [
         "https://1.1.1.1/dns-query#PROXY",
@@ -108,7 +112,7 @@
   ],
   "proxy-providers": {
     "other": {
-      "exclude-filter": "(?i)(故障|维护|維護|维修|維修|异常|異常|暂停|暫停|停用|下线|下線|不可用|失效|宕机|宕機|离线|離線|恢复中|恢復中|修复中|修復中|将在|將在|将于|將於|待恢复|待恢復|预计.*恢复|預計.*恢復|offline|maintenance|unavailable|disabled|recovering|repairing|\\bdown\\b|剩余|到期|官网|套餐|流量|有效期|重置|订阅|更新|IPv6)|(?i)(美国|美國|🇺🇸|united\\s*states|\\bUSA?\\b)",
+      "exclude-filter": "(?i)(故障|维护|維護|维修|維修|异常|異常|暂停|暫停|停用|下线|下線|不可用|失效|宕机|宕機|离线|離線|恢复中|恢復中|修复中|修復中|将在|將在|将于|將於|待恢复|待恢復|预计.*恢复|預計.*恢復|offline|maintenance|unavailable|disabled|recovering|repairing|\\bdown\\b|剩余|到期|官网|套餐|流量|有效期|重置|订阅|更新|IPv6)|(?i)(美国|美國|🇺🇸|United\\ States|\\bUSA\\b|\\bUS\\b)",
       "header": {
         "User-Agent": [
           "mihomo"
@@ -131,7 +135,7 @@
     },
     "us": {
       "exclude-filter": "(?i)(故障|维护|維護|维修|維修|异常|異常|暂停|暫停|停用|下线|下線|不可用|失效|宕机|宕機|离线|離線|恢复中|恢復中|修复中|修復中|将在|將在|将于|將於|待恢复|待恢復|预计.*恢复|預計.*恢復|offline|maintenance|unavailable|disabled|recovering|repairing|\\bdown\\b|剩余|到期|官网|套餐|流量|有效期|重置|订阅|更新|IPv6)",
-      "filter": "(?i)(美国|美國|🇺🇸|united\\s*states|\\bUSA?\\b)",
+      "filter": "(?i)(美国|美國|🇺🇸|United\\ States|\\bUSA\\b|\\bUS\\b)",
       "header": {
         "User-Agent": [
           "mihomo"

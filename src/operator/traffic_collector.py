@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small root-only Mihomo observer; no AI calls, routing writes or raw log history."""
 from collections import deque
+from datetime import datetime,timezone,timedelta
 import base64
 import hashlib
 import ipaddress
@@ -32,9 +33,9 @@ MAX_LOG_BYTES = 8192
 MIN_FREE_BYTES = 4 * 1024 ** 3
 _HOUSEHOLD_NETWORKS = tuple(ipaddress.ip_network(value) for value in
                             ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'))
-_DIAL_ERROR = re.compile(r'\[(?:TCP|UDP)\].*?\bdial\b.*?'
+_DIAL_ERROR = re.compile(r'\[(?P<network>TCP|UDP)\].*?\bdial\b.*?'
                          r'(?P<source>\[[0-9a-fA-F:]+\]|[0-9.]+):[0-9]{1,5}\s+-->\s+'
-                         r'(?P<domain>[A-Za-z0-9._-]{1,254}):[0-9]{1,5}\s+error:\s*(?P<error>.*)')
+                         r'(?P<domain>[A-Za-z0-9._-]{1,254}):(?P<port>[0-9]{1,5})\s+error:\s*(?P<error>.*)')
 
 
 def _household(value):
@@ -88,8 +89,22 @@ def parse_warning(event, now, local_addresses):
     timestamp = str(timestamp)[:128] if isinstance(timestamp, (str, int, float)) else str(int(now // 60))
     if re.fullmatch(r'\d{2}:\d{2}:\d{2}',timestamp):timestamp=time.strftime('%Y-%m-%d',time.gmtime(now+8*3600))+'T'+timestamp
     identifier = hashlib.sha256((timestamp + '\0' + payload).encode()).hexdigest()[:32]
-    return {'domain': domain, 'sourceIP': source, 'error_category': category,
-            'origin': 'client', 'id': identifier, 'at': now}
+    route=re.search(r'\bdial\s+(DIRECT|PROXY|US_AUTO|OTHER_AUTO)\s+\(match',payload)
+    path='direct' if route and route[1]=='DIRECT' else 'proxy' if route else 'unknown'
+    port=int(match['port'])
+    if not 1<=port<=65535:return None
+    result={'domain': domain, 'sourceIP': source, 'error_category': category,
+            'origin': 'client', 'id': identifier, 'at': now,'network':match['network'].lower(),
+            'port':port,'path':path,'application_protocol':'unknown'}
+    raw=event.get('time',event.get('timestamp'))
+    try:
+        if isinstance(raw,str):
+            instant=datetime.fromisoformat(timestamp.replace('Z','+00:00'))
+            if instant.tzinfo is None:instant=instant.replace(tzinfo=timezone(timedelta(hours=8)))
+            result['event_at']=instant.timestamp()
+        elif type(raw) in (int,float):result['event_at']=raw/1000 if raw>1e11 else raw
+    except (ValueError,OverflowError):pass
+    return result
 
 
 def interface_addresses(payload):

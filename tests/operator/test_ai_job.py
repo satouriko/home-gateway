@@ -62,8 +62,8 @@ class WorkerTests(unittest.TestCase):
     def context(self,**extra):
         return {'native_job_id':'job','native_session_id':'source','maintenance_trigger':'independent_audit',**extra}
 
-    def test_large_utf8_observations_reach_the_worker_and_finish_the_native_lease(self):
-        diagnosis={'evidence':'证据'*70000+'TAIL-EVIDENCE'}
+    def test_large_utf8_observations_are_summarized_and_finish_the_native_lease(self):
+        diagnosis={'evidence':'证据'*70000,'checks':{'proxy_https':{'ok':False,'error':'TAIL-EVIDENCE'},'mainland_https':{'ok':True,'result':{'http_status':200}}}}
         result=self.execute(self.context(diagnosis=diagnosis,last_diagnosis=diagnosis))
         self.assertIsNone(result['error'])
         self.assertEqual(result['exit'],0)

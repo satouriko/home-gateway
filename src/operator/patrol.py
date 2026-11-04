@@ -11,6 +11,7 @@ import shutil
 from programs import inspect_active
 from pricing import routine_allowed, pricing_state
 import native_jobs as native
+import maintenance
 
 STATE=Path('/var/lib/net-gateway-agent')
 SOCKET='/run/net-gateway-agent/control.sock'
@@ -18,32 +19,31 @@ AI_SERVICE='net-gateway-ai-patrol.service'
 CONTEXT=Path('/run/net-gateway-agent/patrol-context.json')
 
 def preempt_needed(state,diagnosis,job,context):
-    faults=fault_keys(diagnosis)
-    return bool(faults and fault_signature(diagnosis)!=state.get('last_ai_fingerprint') and job in ['active','activating'] and not context.get('urgent'))
+    return bool(urgent_ai_needed(state,diagnosis,diagnosis.get('maintenance',{}).get('observed_at',time.time())) and job in ['active','activating'] and not context.get('urgent'))
 
 def fault_keys(diagnosis):
-    faults=[]
-    for issue in diagnosis.get('business_observations',{}).get('issues',[]):
-        if issue.get('resolved') is False:faults.append('client_business:'+issue.get('domain','unknown'))
-    direct=diagnosis.get('status',{}).get('policy',{}).get('mode')=='direct'
-    if not direct and diagnosis.get('node_observations',{}).get('urgent') is True:faults.append('proxy_node_pool')
-    if diagnosis.get('status',{}).get('services',{}).get('net-gateway.service',{}).get('ActiveState')!='active':faults.append('gateway_service')
-    if diagnosis.get('status',{}).get('storage',{}).get('critical'):faults.append('disk_space')
-    for name,item in diagnosis.get('checks',{}).items():
-        if direct and name in ['gateway_dns_foreign','proxy_https']:continue
-        result=item.get('result',{})
-        if not item.get('ok') or ('rcode' in result and (result['rcode']!=0 or result.get('answer_count',0)<1)) or result.get('expected_health_status') is False:
-            faults.append(name)
-    return sorted(set(faults))
+    return sorted(set(maintenance.path_faults(diagnosis)+['maintenance:'+name for name in diagnosis.get('maintenance',{}).get('faults',[])]))
 
 def fault_signature(diagnosis):
     faults=fault_keys(diagnosis)
     evidence={name:{key:diagnosis.get('checks',{}).get(name,{}).get('result',{}).get(key) for key in ['rcode','http_status','expected_health_status']} for name in faults}
     for name in faults:evidence[name]['error']=diagnosis.get('checks',{}).get(name,{}).get('error')
     if 'proxy_node_pool' in faults:evidence['proxy_node_pool']['incident']=diagnosis.get('node_observations',{}).get('fingerprint')
-    return hashlib.sha256(json.dumps({'faults':faults,'evidence':evidence,'provider_counts':diagnosis.get('status',{}).get('provider_counts',{})},sort_keys=True).encode()).hexdigest()[:20]
+    cases=[{k:case.get(k) for k in ['id','revision','status','next_review_at']} for case in diagnosis.get('maintenance',{}).get('cases',[]) if case.get('priority')=='urgent' and case.get('requires_attention')]
+    return hashlib.sha256(json.dumps({'faults':faults,'evidence':evidence,'cases':cases},sort_keys=True).encode()).hexdigest()[:20]
 
 def urgent_ai_needed(state,diagnosis,now):
+    upkeep=diagnosis.get('maintenance',{})
+    attention=[case for case in upkeep.get('cases',[]) if case.get('priority')=='urgent' and case.get('requires_attention')]
+    paths=maintenance.path_faults(diagnosis)
+    if upkeep and (attention or upkeep.get('faults') or upkeep.get('workflow',{}).get('result',{}).get('wake')=='urgent'):
+        owned={case.get('key','')[5:] for case in upkeep.get('cases',[]) if case.get('key','').startswith('path:') and
+               case.get('status') in ['working','verifying','blocked'] and not case.get('requires_attention') and
+               now<case.get('next_review_at',0)<=now+900}
+        if paths and set(paths)<=owned and not attention and not upkeep.get('faults'):return False
+        changed=fault_signature(diagnosis)!=state.get('last_ai_fingerprint')
+        review=bool(attention or paths or upkeep.get('faults')) and now-state.get('last_ai_at',0)>=upkeep.get('next_check_seconds',300)
+        return bool(changed or review)
     return bool(fault_keys(diagnosis) and (fault_signature(diagnosis)!=state.get('last_ai_fingerprint') or
         (state.get('last_ai_failed') and now-state.get('last_ai_at',0)>=6*3600 and state.get('failed_retries_today',0)<3)))
 
@@ -53,10 +53,11 @@ def should_run_ai(state, diagnosis, now):
     if not routine_allowed(now) or state.get('pause_routine') or state.get('audit_plan',{}).get('enabled') is False:return False
     budget=state.get('audit_plan',{}).get('daily_budget',6)
     if len([at for at in state.get('routine_run_times',[]) if now-at<86400])>=budget:return False
-    if faults:return audit_due(state,now) and now-state.get('last_ai_at',0)>=audit_interval(state,now)*3600
+    if faults:return audit_due(state,now) and now-state.get('last_routine_ai_at',0)>=2*3600
     if state.get('last_ai_at',0)==0 and not state.get('diagnostic_program',{}).get('active'):return True
     if audit_due(state,now) and now-state.get('last_routine_ai_at',0)>=2*3600:return True
     review=state.get('review_request')
+    if state.get('maintenance',{}).get('workflow',{}).get('result',{}).get('wake')=='routine' and now-state.get('last_routine_ai_at',0)>=2*3600:return True
     return bool(review and now-state.get('last_routine_ai_at',0)>=2*3600 and (review['fingerprint'] not in state.get('reviewed',{}) or state.get('last_ai_failed')))
 
 def audit_interval(state,now):
@@ -120,20 +121,67 @@ def bound_observations(state,now):
     if state.get('business_observations') is not None:state['business_observations']['checks']={name:value for name,value in checks.items() if isinstance(value,dict) and cutoff<=value.get('at',0)<=now}
     return state
 
+def execute_workflow(state,diagnosis,upkeep,now,request=None):
+    """Consume pure advice through the bounded, existing privileged adapters."""
+    from business_watch import endpoint_for
+    request=call if request is None else request
+    business=state.setdefault('business_observations',{});checks=business.setdefault('checks',{})
+    changed=False;executed={'at':now,'probes':[],'route_reviews':[]}
+    batch_due=now-business.get('last_probe_at',-100000)>=600
+    for domain in upkeep['workflow']['result'].get('probe_domains',[])[:3]:
+        if not batch_due or now-checks.get(domain,{}).get('at',-100000)<1800:continue
+        row=next((item for item in business.get('domains',[]) if item.get('domain')==domain),None)
+        endpoint=endpoint_for(row,checks.get(domain,{}).get('endpoint'))
+        if endpoint is None:
+            issue=next((item for item in business.get('issues',[]) if item.get('domain')==domain),{})
+            endpoint=endpoint_for({'endpoints':[issue['endpoint']]}) if issue.get('endpoint') else None
+        if endpoint is None:result={'state':'endpoint_unknown','application_verified':False}
+        else:
+            try:result=request({'operation':'probe_compare','target':domain,'endpoint':endpoint})
+            except Exception as error:result={'state':'probe_unavailable','error_category':type(error).__name__,'application_verified':False}
+            business['last_probe_at']=now;executed['probes'].append({'domain':domain,'endpoint':endpoint})
+        checks[domain]={'at':now,'endpoint':endpoint,'result':result}
+        state.setdefault('tracked_probes',{})[domain]={**result,'observed_at':now}
+        changed=True
+    candidates={item['domain']:item for item in upkeep.get('routing',{}).get('candidates',[])}
+    reviews=state.setdefault('routing_reviews',{})
+    for domain in upkeep['workflow']['result'].get('route_candidates',[])[:3]:
+        candidate=candidates.get(domain)
+        if candidate is None:continue
+        payload={'operation':'route_evaluate','target':domain,'path':candidate['path'],
+            'evidence_ids':candidate['evidence_ids'],'business_requirement_evidence_ids':candidate['business_requirement_evidence_ids']}
+        previous=reviews.get(domain,{})
+        if previous.get('request')==payload and now-previous.get('at',0)<600:continue
+        try:result=request(payload)
+        except Exception as error:result={'action':'investigate','reason':'route_evaluation_'+type(error).__name__,'application_verified':False,'network_restored':False}
+        reviews[domain]={'at':now,'request':payload,'result':result}
+        executed['route_reviews'].append(domain);changed=True
+    state['routing_reviews']=dict(sorted(reviews.items(),key=lambda item:item[1]['at'],reverse=True)[:24])
+    state['workflow_execution']=executed
+    diagnosis['business_observations']=business
+    return changed
+
+
 def main():
     path=STATE/'patrol.json';state=json.loads(path.read_text()) if path.exists() else {}
     now=time.time();bound_observations(state,now);diagnosis=call({'operation':'diagnose'})
+    observed=None
     try:
         from business_watch import scan
         observed=call({'operation':'traffic_status'})
-        business=scan(observed,state.get('business_observations',{}),lambda domain:call({'operation':'probe_compare','target':domain}),now)
+        business=scan(observed,state.get('business_observations',{}),lambda domain,endpoint=None:call({'operation':'probe_compare','target':domain,**({'endpoint':endpoint} if endpoint else {})}),now,allow_probe=False)
         state['business_observations']=business;diagnosis['business_observations']=business
-    except Exception:pass  # Missing observation is a coverage gap, not fictitious health.
+        state.pop('business_observation_failure',None);state.pop('pending_business_input',None)
+    except Exception as error:
+        state['business_observation_failure']={'at':now,'error':type(error).__name__,'coverage':'real client observations unavailable; no application health claim'}
+        if observed is not None:state['pending_business_input']=observed
+        diagnosis['business_observations']=state.get('business_observations',{})
+        diagnosis['observation_failure']=state['business_observation_failure']
     faults=fault_keys(diagnosis)
     history=state.get('history',[])
     history.append({'at':now,'faults':faults,'proxy_ms':diagnosis.get('checks',{}).get('proxy_https',{}).get('result',{}).get('elapsed_ms')})
     history=history[-96:]
-    snapshot={**diagnosis,'history':history[-24:]}
+    snapshot={**diagnosis,'observations':diagnosis.get('business_observations',{}),'history':history[-24:]}
     if state.get('last_quality'):snapshot['quality_summary']={'preferred_pool':state['last_quality'].get('node_pools',{}).get('us',[]),'active_domains':state['last_quality'].get('active_domains',{})}
     program=inspect_active(snapshot)
     if program.get('version')!=state.get('confidence_program_version'):
@@ -184,18 +232,22 @@ def main():
     state.update(last_diagnosis=diagnosis)
     observed_nodes=diagnosis.get('node_observations',{})
     maybe_request_node_review(state,observed_nodes,native.effective_state(state,native.read()).get('reviewed',{}))
-    for domain in program.get('result',{}).get('probe_domains',[])[:3]:
-        try:
-            result=call({'operation':'probe','target':domain});state.setdefault('tracked_probes',{})[domain]={**result,'observed_at':now}
-            diagnosis['checks']['target:'+domain]={'ok':True,'result':result}
-        except Exception as error:
-            result={'error':type(error).__name__,'observed_at':now};state.setdefault('tracked_probes',{})[domain]=result
-            diagnosis['checks']['target:'+domain]={'ok':False,**result}
+    state['diagnostic_probe_advice']=program.get('result',{}).get('probe_domains',[])[:3]
     faults=fault_keys(diagnosis)
     quality=None
     if now-state.get('last_quality_at',0)>=1800 or faults:
         try:quality=call({'operation':'quality'});state.update(last_quality_at=now,last_quality=quality)
         except Exception:pass
+    approved=STATE/'approved-policy.json'
+    try:preferences=json.loads(approved.read_text()).get('preferences',{}) if approved.exists() else diagnosis.get('status',{}).get('policy',{}).get('preferences',{})
+    except (ValueError,OSError):
+        preferences={};diagnosis['maintenance_input_errors']=['preferences_storage']
+    upkeep=maintenance.observe(state,diagnosis,now,preferences=preferences,directory=STATE)
+    if execute_workflow(state,diagnosis,upkeep,now):
+        upkeep=maintenance.observe(state,diagnosis,now,preferences=preferences,directory=STATE)
+    upkeep['observed_at']=now;state['maintenance']=upkeep;diagnosis['maintenance']=upkeep
+    state['next_check_at']=now+upkeep['next_check_seconds']
+    state['last_diagnosis']=diagnosis;faults=fault_keys(diagnosis)
     with native.dispatch_lock(STATE):
         job=subprocess.run(['systemctl','is-active',AI_SERVICE],capture_output=True,text=True).stdout.strip()
         last_result=subprocess.run(['systemctl','show',AI_SERVICE,'-p','Result','--value'],capture_output=True,text=True).stdout.strip()
@@ -214,7 +266,7 @@ def main():
         if preempt_needed(state,diagnosis,job,running_context):
             subprocess.run(['systemctl','stop',AI_SERVICE],check=True,timeout=15)
             state['routine_preempted_at']=now;job='inactive'
-        if faults and job in ['active','activating'] and fault_signature(diagnosis)!=state.get('last_ai_fingerprint'):
+        if urgent_ai_needed(state,diagnosis,now) and job in ['active','activating'] and fault_signature(diagnosis)!=state.get('last_ai_fingerprint'):
             running_context.update(urgent=True,observed_at=now,diagnosis=diagnosis,maintenance_trigger='additional_fault')
             save(CONTEXT,running_context,'gateway-operators')
         bound_observations(state,now)
@@ -227,6 +279,7 @@ def main():
             kind='anomaly' if urgent else ('independent_audit' if audit_due(state,now) or faults else 'evidence_driven_improvement')
             context={'observed_at':now,'diagnosis':diagnosis,'history':history[-16:],'tickets':state['tickets'],
                 'diagnostic_program':program,'tracked_probes':state.get('tracked_probes',{}),
+                'maintenance':upkeep,
                 'maintenance_trigger':kind,'audit_rollup':rollup,
                 'urgent':urgent,'pricing':pricing_state(now),
                 'review_request':state.get('review_request'),'storage':storage,
@@ -235,14 +288,14 @@ def main():
             save(CONTEXT,context,'gateway-operators')
             subprocess.run(['systemctl','start','--no-block',AI_SERVICE],check=True)
             if state['last_ai_failed']:state['failed_retries_today']=state.get('failed_retries_today',0)+1
-            state.update(last_ai_at=now,last_ai_kind=kind,last_ai_faults=faults,last_ai_fingerprint=fault_signature(diagnosis) if faults else None,ai_run_times=[*window,now])
+            state.update(last_ai_at=now,last_ai_kind=kind,last_ai_faults=faults,last_ai_fingerprint=fault_signature(diagnosis) if urgent else None,ai_run_times=[*window,now])
             if kind=='independent_audit':state.update(last_independent_audit_at=now,last_audited_program_version=program.get('version'),audit_rollup={'samples':0,'fault_counts':{}})
             if not urgent:
                 state['last_routine_ai_at']=now
                 state['routine_run_times']=[at for at in state.get('routine_run_times',[]) if now-at<86400]+[now]
                 if state.get('review_request'):
                     reviewed=state.setdefault('reviewed',{});reviewed[state['review_request']['fingerprint']]=now;state['reviewed']=dict(list(reviewed.items())[-32:])
-        if not faults:state.update(last_ai_faults=[],last_ai_fingerprint=None)
+        if not faults and upkeep['workflow']['result']['wake']!='urgent':state.update(last_ai_faults=[],last_ai_fingerprint=None)
         state['pricing']=pricing_state(now)
         state['ai_job_state']=job
         save(path,state)

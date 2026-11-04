@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 from types import SimpleNamespace
 import patrol
+import workflow
 from test_broker import healthy_result
 
 class DispatchTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class DispatchTests(unittest.TestCase):
                 def command(args,**kwargs):
                     commands.append(args);return SimpleNamespace(stdout='inactive' if args[1]=='is-active' else 'success',returncode=0)
                 context=Path(folder)/'context.json'
-                with patch.object(patrol,'STATE',Path(folder)),patch.object(patrol,'CONTEXT',context),patch.object(patrol,'call',side_effect=call),patch.object(patrol,'inspect_active',return_value={'active':True,'version':'v','result':{'action':'none','probe_domains':[]}}),patch.object(patrol.subprocess,'run',side_effect=command),patch.object(patrol,'save',side_effect=lambda p,v,group=None:p.write_text(json.dumps(v))),patch.object(patrol,'routine_allowed',return_value=True),redirect_stdout(io.StringIO()):
+                with patch.object(patrol,'STATE',Path(folder)),patch.object(workflow,'STATE',Path(folder)),patch.object(patrol,'CONTEXT',context),patch.object(patrol,'call',side_effect=call),patch.object(patrol,'inspect_active',return_value={'active':True,'version':'v','result':{'action':'none','probe_domains':[]}}),patch.object(patrol.subprocess,'run',side_effect=command),patch.object(patrol,'save',side_effect=lambda p,v,group=None:p.write_text(json.dumps(v))),patch.object(patrol,'routine_allowed',return_value=True),redirect_stdout(io.StringIO()):
                     patrol.main()
                 self.assertIn('recheck_nodes',calls)
                 started=any(c[1]=='start' for c in commands)
@@ -48,7 +49,7 @@ class DispatchTests(unittest.TestCase):
             return SimpleNamespace(stdout=job if args[1]=='is-active' else 'success',returncode=0)
         with tempfile.TemporaryDirectory() as folder:
             context=Path(folder)/'context.json';context.write_text('{"urgent":false}')
-            with patch.object(patrol,'STATE',Path(folder)),patch.object(patrol,'CONTEXT',context),patch.object(patrol,'call',side_effect=call),patch.object(patrol,'inspect_active',return_value={'active':True,'version':'v','result':{'action':'none','probe_domains':[]}}),patch.object(patrol.subprocess,'run',side_effect=command),patch.object(patrol,'save',side_effect=lambda p,data,group=None:p.write_text(json.dumps(data))),patch.object(patrol,'routine_allowed',return_value=True),redirect_stdout(io.StringIO()):
+            with patch.object(patrol,'STATE',Path(folder)),patch.object(workflow,'STATE',Path(folder)),patch.object(patrol,'CONTEXT',context),patch.object(patrol,'call',side_effect=call),patch.object(patrol,'inspect_active',return_value={'active':True,'version':'v','result':{'action':'none','probe_domains':[]}}),patch.object(patrol.subprocess,'run',side_effect=command),patch.object(patrol,'save',side_effect=lambda p,data,group=None:p.write_text(json.dumps(data))),patch.object(patrol,'routine_allowed',return_value=True),redirect_stdout(io.StringIO()):
                 patrol.main()
             return calls,commands,json.loads(context.read_text())
     def test_successful_conventional_repair_does_not_purchase_ai_analysis(self):

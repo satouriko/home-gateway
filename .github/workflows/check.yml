@@ -18,7 +18,10 @@ jobs:
         with:
           node-version: '24.14.1'
       - run: python3 -m pip install -r requirements-dev.txt
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y bubblewrap
       - run: make check
+      - run: python3 backup.py --check-maintained-tests --repository .
       - run: npm ci --prefix runtime/dsh --ignore-scripts --no-audit --no-fund
       - run: python3 tools/apply_dsh_patches.py --runtime runtime/dsh
       - run: SDK_RUNTIME="$PWD/runtime/dsh/node_modules" node --test tests/dsh-execution/*.test.mjs

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fixed gateway operations over a private Unix socket; users interact only through DSH chat."""
 from concurrent.futures import ThreadPoolExecutor
+import copy
 import json
 import grp
 import os
@@ -38,6 +39,17 @@ SYNC_REQUEST_LOCK=threading.Lock()
 SYNC_START_LOCK=threading.Lock()
 SYNC_EVENT=threading.Event()
 SYNC_THREAD=None
+COMPARISON_LOCK=threading.Lock()
+COMPARISON_RECORDS={}
+CURRENT_VERSION=object()
+
+def exported_hash(value):
+    import hashlib
+    encoded=(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+def exported_plan_hash(plan):
+    return exported_hash({k:plan[k] for k in ['interval_hours','daily_budget','enabled','schedule'] if k in plan})
 
 def source_sync_pending(status_path=None):
     try:
@@ -76,6 +88,10 @@ def publication_version(reason):
     for name,source in [('diagnostic','program_publish'),('tool','tool_publish')]:
         path=STATE/(name+'-active.json')
         if path.exists():files['src/maintained/'+('diagnostic.py' if name=='diagnostic' else 'tool.py')]=json.loads(path.read_text()).get('source','').encode()
+    workflow=STATE/'workflow-state.json'
+    if workflow.exists():
+        active=json.loads(workflow.read_text()).get('active')
+        if active:files['src/maintained/workflow.py']=active['source'].encode()
     skill=Path('/usr/local/share/net-gateway-agent/skill/SKILL.md')
     if skill.exists():files['src/dsh/skill/SKILL.md']=skill.read_bytes()
     def encoded(value):return (json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()
@@ -86,10 +102,24 @@ def publication_version(reason):
         value=json.loads(plan.read_text());files['preferences/audit-plan.json']=encoded({k:value[k] for k in ['interval_hours','daily_budget','enabled','schedule'] if k in value})
     return snapshot_versions(files).get(reason)
 
-def queue_source_sync(reason,session_id=None):
+def publication_secrets():
+    values=[]
+    try:
+        config=json.loads(CONFIG.read_text());values.append(config.get('secret',''))
+        for provider in config.get('proxy-providers',{}).values():
+            url=provider.get('url','');values.extend([url,urllib.parse.urlsplit(url).hostname or ''])
+    except FileNotFoundError:pass
+    env=Path('/var/lib/dsh/state/.env')
+    if env.exists():
+        for line in env.read_text().splitlines():
+            if '=' in line and not line.lstrip().startswith('#'):values.append(line.split('=',1)[1].strip().strip('\"\''))
+    return [value for value in values if isinstance(value,str) and len(value)>=8]
+
+def queue_source_sync(reason,session_id=None,commit_message=None,version=CURRENT_VERSION):
     with SYNC_REQUEST_LOCK:
-        receipt=publication_registry().register(reason,session_id,publication_version(reason))
-        write_state(STATE/'source-sync-request.json',{'id':receipt['id'],'reason':reason,'requested_at':receipt['requested_at']})
+        registry=publication_registry()
+        receipt=registry.register(reason,session_id,publication_version(reason) if version is CURRENT_VERSION else version,commit_message=commit_message,forbidden=publication_secrets())
+        write_state(STATE/'source-sync-request.json',registry.request_descriptor(receipt['id']))
     start_sync_dispatcher();SYNC_EVENT.set()
     return {'requested':True,'pending':True,'request_id':receipt['id'],'version':receipt['version'],
             'phase':'held' if SYNC_HOLD.exists() else 'pending','notification':'durable automatic receipt in originating chat' if session_id else 'background receipt'}
@@ -168,14 +198,14 @@ def known_good():
 
 def policy_action(operation, patch, receipt=None):
     from user_policy import merge_preferences, render
-    old=json.loads(CONFIG.read_text());approved=current_policy()
-    preferences=merge_preferences(approved.get('preferences',{}),patch)
-    candidate,proposed=render(old,preferences,approved.get('preferences',{}))
-    validate_baseline(candidate,pwd.getpwnam('dsh').pw_uid,proposed)
     transaction=acquire_transaction()
     temporary=CONFIG.with_suffix('.policy-next.json');pending=STATE/'pending.json'
     try:
         if pending.exists():raise ValueError('a previous repair is pending protected rollback')
+        old=json.loads(CONFIG.read_text());approved=current_policy()
+        preferences=merge_preferences(approved.get('preferences',{}),patch)
+        candidate,proposed=render(old,preferences,approved.get('preferences',{}))
+        validate_baseline(candidate,pwd.getpwnam('dsh').pw_uid,proposed)
         write_state(temporary,candidate)
         command('env','SAFE_PATHS=/etc/net-gateway','/usr/local/bin/mihomo','-t','-d','/var/lib/net-gateway','-f',str(temporary),timeout=25)
         if operation=='policy_test':return {'tested':True,'applied':False,'proposed_policy':proposed}
@@ -213,19 +243,21 @@ def source_control_status(path=None):
         return result
     except (OSError,ValueError):return {'available':False,'pending':source_sync_pending(path)}
 
-def context():
+def context_full():
     import hashlib
     result=status()
     result['self']={'runtime':'DeepSeek Harness','reasoning':'external model API','data_plane':'Mihomo',
         'uid':pwd.getpwnam('dsh').pw_uid,'user_interface':'chat','control_path':'independent UID route and DNS; ordinary shell traffic is not a user-path test'}
     result['sources']={'code':'/usr/local/lib/net-gateway-agent','editable_source':'/var/lib/dsh/workspace/network-maintainer',
         'background':'/usr/local/share/net-gateway-agent/BACKGROUND.md','contracts':'/usr/local/share/net-gateway-agent/CONTRACTS.md',
-        'skill_source':'/var/lib/dsh/workspace/network-maintainer/skill/SKILL.md','skill_active':'/usr/local/share/net-gateway-agent/skill/SKILL.md'}
+        'skill_source':'/var/lib/dsh/workspace/network-maintainer/skill/SKILL.md','skill_active':'/usr/local/share/net-gateway-agent/skill/SKILL.md',
+        'workflow_source':'/var/lib/dsh/workspace/network-maintainer/programs/workflow.py','workflow_builtin':'/usr/local/share/net-gateway-agent/workflow.py'}
     skill=Path(result['sources']['skill_active'])
     result['skill_revision']=hashlib.sha256(skill.read_bytes()).hexdigest()[:16]
     result['release_capabilities']={'diagnostic_programs':Path('/usr/local/lib/net-gateway-agent/programs.py').exists(),
         'maintained_tools':Path('/usr/local/lib/net-gateway-agent/extensions.py').exists(),
-        'skills':Path('/usr/local/lib/net-gateway-agent/skills.py').exists()}
+        'skills':Path('/usr/local/lib/net-gateway-agent/skills.py').exists(),
+        'operational_workflow':Path('/usr/local/lib/net-gateway-agent/workflow.py').exists()}
     from pricing import pricing_state
     result['maintenance_pricing']=pricing_state(time.time())
     result['audit_plan']=audit_plan()
@@ -234,6 +266,16 @@ def context():
     result['source_control']=source_control_status()
     result['observations']=traffic_status()
     result['node_health']=node_observations(result.get('policy',{}))
+    from runtime_facts import collect
+    result['runtime_facts']=collect()
+    from incidents import IncidentStore
+    try:result['incidents']=IncidentStore(STATE/'incidents.json').list()
+    except ValueError:result['incidents']={'available':False,'maintenance_fault':'incident storage requires recovery'}
+    patrol=STATE/'patrol.json'
+    if patrol.exists():
+        progress=json.loads(patrol.read_text())
+        for key in ['maintenance','history','last_diagnosis','business_observations']:
+            if key in progress:result[key]=progress[key]
     result['probe_capabilities']={'operation':'probe_compare','paths':['direct','proxy'],'isolation':'disposable engine, separate UID route, concrete selected proxy; no household configuration changes','scope':'HTTPS root, not a logged-in client application','coding_sandbox':'capability-dropping bwrap; credentials, history and broker socket hidden'}
     changes=STATE/'deployment-events.json'
     if changes.exists():result['recent_system_changes']=json.loads(changes.read_text())[-6:]
@@ -243,6 +285,10 @@ def context():
         if event.get('urgent'):result['maintenance_event']={key:event.get(key) for key in ['urgent','observed_at','maintenance_trigger','diagnosis']}
     result['protected_boundary']='credentials, startup source, independent control route and recovery supervisor are not writable from maintained tools'
     return result
+
+def context():
+    from evidence import system_context
+    return system_context(context_full())
 
 def status():
     result={'checked_at':time.time(),'gateway_address':'192.168.2.4','upstream':'192.168.2.1',
@@ -426,8 +472,40 @@ def dispatch(request):
     if request.get('operation')=='probe_compare':
         data=validate_request(request)
         from probe_transport import compare
-        return compare(data['target'],api,CONFIG)
+        comparison=compare(data['target'],api,CONFIG,endpoint=data.get('endpoint'),refresh=data.get('refresh',False))
+        if comparison.get('comparison_id'):
+            from routing_control import positive_controls
+            from route_evidence import EvidenceStore
+            with COMPARISON_LOCK:
+                ident=comparison['comparison_id']
+                if ident in COMPARISON_RECORDS:return {**copy.deepcopy(COMPARISON_RECORDS[ident]),'cached':True}
+                comparison['controls']=positive_controls(diagnose())
+                record=EvidenceStore(STATE/'route-evidence.json').record(comparison,current_policy()['version'])
+                result={**comparison,'evidence_id':record['id']}
+                COMPARISON_RECORDS[ident]=copy.deepcopy(result)
+                while len(COMPARISON_RECORDS)>128:del COMPARISON_RECORDS[next(iter(COMPARISON_RECORDS))]
+                return result
+        return comparison
     data=validate_request(request);op=data['operation']
+    if op.startswith('route_'):
+        from routing_control import operation
+        return operation(data,sys.modules[__name__])
+    if op=='evidence_detail':
+        from evidence import detail
+        result=detail(context_full(),data['section'],data.get('target'),data.get('limit',16))
+        if data.get('snapshot_ref') is not None:result['requested_snapshot_matches']=data['snapshot_ref']==result['snapshot_ref']
+        return result
+    if op in ['incidents','incident_get','incident_decide']:
+        from incidents import IncidentStore
+        store=IncidentStore(STATE/'incidents.json')
+        if op=='incidents':return store.list(time.time())
+        if op=='incident_get':return store.get(data['id'])
+        return store.decide(data['id'],data['revision'],data['decision'],data['session_id'],time.time())
+    if op.startswith('workflow_'):
+        from workflow import workflow_action
+        if not PROGRAM_LOCK.acquire(blocking=False):raise ValueError('another maintained program operation is running')
+        try:return workflow_action(op,data.get('source'))
+        finally:PROGRAM_LOCK.release()
     if op=='status':return status()
     if op=='overview':
         from overview import CACHE, build_snapshot
@@ -452,7 +530,8 @@ def dispatch(request):
         import native_jobs as native
         with native.locked():
             record=native.read();record.update(enabled=True,provision_requested=True);native.save(record)
-        plan=audit_plan();plan['enabled']=True;write_state(STATE/'audit-plan.json',plan);return {'restore_requested':True}
+        plan=audit_plan();plan['enabled']=True;write_state(STATE/'audit-plan.json',plan)
+        return {'restore_requested':True,'source_sync_version':exported_plan_hash(plan)}
     if op=='audit_plan_set':
         from native_jobs import update_schedule
         update_schedule(data['interval_hours'])
@@ -498,11 +577,23 @@ def dispatch(request):
     return repair(op)
 
 def handle(request):
+    # Reject credential-bearing or malformed prose before changing live code.
+    # Legacy deterministic callers may omit it; model publishers provide it in
+    # their existing tool call, which is already part of the visible transcript.
+    message=None
+    if 'commit_message' in request:
+        from commit_messages import validate_commit_message
+        message=validate_commit_message(request['commit_message'],publication_secrets())
     result=dispatch(request);op=request.get('operation')
-    published=(op in ['program_publish','tool_publish','skill_publish'] and result.get('deployed') is True)
+    published=(op in ['program_publish','tool_publish','skill_publish','workflow_publish'] and result.get('deployed') is True)
     published=published or op in ['audit_plan_set','audit_plan_enable'] or (op=='native_observe' and result.get('preference_changed')) or (op=='policy_apply' and result.get('verified_healthy') is True and result.get('rollback_armed') is False)
+    published=published or (op=='route_apply' and result.get('applied') is True and result.get('verified_healthy') is True and result.get('rollback_armed') is False)
     if published:
-        try:sync=queue_source_sync(op,request.get('session_id'))
+        if op in ['program_publish','tool_publish','skill_publish','workflow_publish']:version=result.get('version')
+        elif op=='policy_apply':version=exported_hash(result['policy']) if result.get('policy') is not None else None
+        elif op=='audit_plan_set':version=exported_plan_hash(result)
+        else:version=result.get('source_sync_version')
+        try:sync=queue_source_sync(op,request.get('session_id'),message,version=version)
         except Exception:sync={'requested':False,'retry':'independent timer'}
         result={**result,'source_control_sync':sync}
     return result
@@ -533,7 +624,7 @@ class UnixHandler(socketserver.StreamRequestHandler):
         allowed_registration=uid==0 or (uid==pwd.getpwnam('dsh').pw_uid and ((request.get('kind')=='canary' and 'net-gateway-skill-canary-' in cgroup) or (request.get('kind')=='patrol' and 'net-gateway-ai-patrol' in cgroup) or (request.get('kind')=='user' and '/dsh.service' in cgroup)))
         if registered and not allowed_registration:
             self.wfile.write(b'{"ok":false,"error":"PermissionError","message":"session registration does not match caller"}\n');return
-        if readonly and request.get('operation') not in READS|{'program_status','tool_status','skill_status'} and not (registered and allowed_registration):
+        if readonly and request.get('operation') not in READS|{'program_status','tool_status','skill_status','workflow_status','route_status','route_get','route_evaluate'} and not (registered and allowed_registration):
             self.wfile.write(b'{"ok":false,"error":"PermissionError","message":"worker tools may read evidence only"}\n');return
         if request.get('operation')=='policy_apply' and uid!=0 and '/dsh.service' not in cgroup:
             self.wfile.write(b'{"ok":false,"error":"PermissionError","message":"only an interactive chat request may change user objectives"}\n');return
