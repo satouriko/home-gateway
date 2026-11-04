@@ -176,6 +176,10 @@ def _summarize(resolution, picked, samples, control=None):
     if any(item.get("tls_ok") for item in samples):
         return "tls_reachable"
     if isinstance(control, dict) and control.get("tls_ok") is True:
+        # A rejected certificate means the handshake got as far as certificate
+        # verification; calling that "no handshake" would misstate the evidence.
+        if any(item.get("error") == "SSLCertVerificationError" for item in samples):
+            return "tls_cert_rejected_target_only"
         return "tls_rejected_target_only"
     connects = [item for item in samples if item.get("tcp_ok")]
     if connects:
@@ -204,6 +208,11 @@ def _verdict_note(verdict, control):
         note = "no global unicast address to test; probe input would be rejected"
     elif verdict == "tls_reachable":
         note = "TLS handshake completed from the control path; application answers are separate evidence"
+    elif verdict == "tls_cert_rejected_target_only":
+        note = ("control TLS to %s completed on this path, but this endpoint presented a "
+                "certificate this host's trust store rejects; whether that is an endpoint "
+                "certificate or interception on this path is not determined, so neither "
+                "endpoint health nor link health follows" % control_domain)
     elif verdict == "tls_rejected_target_only":
         note = ("control TLS to %s completed on this path, but this endpoint did not complete "
                 "the probe's TLS handshake; it may refuse plain TLS, require HTTP/3, or not "
@@ -330,6 +339,14 @@ def self_test():
     check("verdict_target_only_when_control_ok",
           _summarize({"dns_state": "resolved"}, ["1.1.1.1"], fast_fail,
                      {"domain": "www.baidu.com", "tls_ok": True}) == "tls_rejected_target_only")
+    check("verdict_cert_rejection_is_not_no_handshake",
+          _summarize({"dns_state": "resolved"}, ["1.1.1.1"],
+                     [{"tcp_ok": True, "tcp_ms": 0.3, "tls_ok": False,
+                       "error": "SSLCertVerificationError"}],
+                     {"domain": "www.baidu.com", "tls_ok": True}) == "tls_cert_rejected_target_only")
+    check("cert_note_says_cause_undetermined",
+          "not determined" in
+          _verdict_note("tls_cert_rejected_target_only", {"domain": "www.baidu.com", "tls_ok": True}))
     check("verdict_keeps_conservative_when_control_down",
           _summarize({"dns_state": "resolved"}, ["1.1.1.1"], fast_fail,
                      {"domain": "www.baidu.com", "tls_ok": False}) == "connect_intercepted_no_tls")
