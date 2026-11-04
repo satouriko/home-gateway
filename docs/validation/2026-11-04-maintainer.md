@@ -40,3 +40,9 @@ python3 backup.py --check-maintained-tests --repository .
 上述程序与模型测试均不代替已登录应用验收。Git同步的成功与否以逐版本远端回执为准；外部认证或传输失败保留请求，由独立定时器重试，不能把队列或本地提交说成已备份。
 
 会话 session-8d4606f0-2dad-4b2f-96fa-ee0dbd1e26bb 使用自己的 program_test/program_publish 恢复原诊断源码 b7a033d9fe47113c，三项固定测试通过并撰写具体提交说明。之后实际新鲜巡检确认 active=true、action=none，没有输入异常或回退；独立工作流wake=none，转发PID仍为235116。
+
+## 断电重启与远端闭环
+
+现场断电再上电后，DSH、转发、受保护工具代理、流量采样与巡检、恢复、存储、备份定时器均自动恢复，无失败单元；网页返回HTTP 200，网关两类DNS、模型独立DNS、国内HTTPS 200与代理HTTPS 204通过。诊断程序仍为b7a033d9fe47113c。当前约42°C、可用内存约7.3GB、磁盘空闲约18.8GB，throttled=0x0；这些仅说明本次启动后的状态。原系统设置Storage=volatile，没有保留断电前启动的系统日志，先前失联根因仍未确认，重启恢复不等于根因已修复。
+
+树莓派的真实备份服务成功将程序与偏好推送到main，确认提交beb2d57d1eef8227861fae11e8a8e59c73af6e60、pending=false，并确认工作流d731978cc5fa39b4及诊断程序b7a033d9fe47113c的实际快照版本。原工作流维护会话和诊断恢复会话均持久化了对应提交的原生成功回执，不需要额外模型调用；此前失败回执仍保留为历史。本地main与origin/main一致，GitHub Actions运行41861285359的核心检查与Chromium/WebKit概览验收均通过。
