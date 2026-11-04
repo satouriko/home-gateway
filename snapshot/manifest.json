@@ -194,7 +194,7 @@
     },
     "snapshot/published/workflow-active.json": {
       "mode": 384,
-      "sha256": "25e059defd05ca78e786c56724af37c223dabc92709298e85f2d6ca846743322"
+      "sha256": "a936de141d583253252ba918332c8ec9f29a998ebac34fdfa672eb41b9ecc59f"
     },
     "src/dsh/AGENTS.md": {
       "mode": 416,
@@ -270,7 +270,7 @@
     },
     "src/maintained/workflow.py": {
       "mode": 384,
-      "sha256": "533cfe3eebba46275b9ac240a36ff1d4445fe038c54653800f349e84a15dda2d"
+      "sha256": "d731978cc5fa39b41c7c31ea6b900af2fd2a0af80645b419225fe368ebcedcfa"
     },
     "src/operator/adaptive_routing.py": {
       "mode": 420,
