@@ -78,4 +78,32 @@ assert r['action'] == 'recheck_nodes', r
 healthy = snap()
 assert v17(healthy)['action'] == 'none', v17(healthy)
 assert not v17(healthy).get('review_request'), v17(healthy)
+
+# F. 控制路径引导 DNS 瞬时超时（固定路径与网关 DNS 正常）不得被当作
+#    节点/分流故障，也不得掩盖已去重的客户端工单；真实快照 2026-11-04 15:00
+#    同时出现 bootstrap_dns_api=TimeoutError 与 4 条已知客户端工单。
+ticket_domains = ['apd-pcdnwxstat.teg.tencent-cloud.net', 'a.v.smtcdns.com',
+                  'amp-api-edge.apps.apple.com', 'test.tunnel.com']
+ticket_faults = ['client_business:' + d for d in ticket_domains]
+unprobeable = {
+    'apd-pcdnwxstat.teg.tencent-cloud.net': {'at': 1090, 'result': {
+        'state': 'probe_unavailable', 'error_category': 'ValueError'}},
+    'a.v.smtcdns.com': {'at': 1090, 'result': {
+        'state': 'probe_unavailable', 'error_category': 'ValueError'}},
+    'test.tunnel.com': {'at': 1090, 'result': {
+        'state': 'probe_unavailable', 'error_category': 'ValueError'}},
+}
+boot = snap(faults=ticket_faults,
+            issues=[{'domain': d, 'fingerprint': 'fp%d' % i}
+                    for i, d in enumerate(ticket_domains)],
+            checks=unprobeable)
+boot['history'] = [{'at': 1000 + i, 'faults': ticket_faults,
+                    'faults_after_confirmation': ticket_faults} for i in range(12)]
+boot['checks']['bootstrap_dns_api'] = {'ok': False, 'error': 'TimeoutError'}
+rb = v17(boot)
+assert rb['action'] == 'none', rb
+assert '控制路径引导 DNS 检查失败' in rb['summary'], rb['summary']
+assert '不据此换节点' in rb['summary'], rb['summary']
+assert not rb.get('review_request'), rb
+assert rb['probe_domains'] == [], rb
 print('v17 regression cases passed')

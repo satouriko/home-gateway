@@ -394,7 +394,7 @@
     },
     "tests/maintained/test_inspect_v17.py": {
       "mode": 384,
-      "sha256": "3c0e78c86c7655951f8e881e9eed28aa91d29d8b85b12b541db54dc816eb5e3c"
+      "sha256": "d8b4110604a4044638942c869a471466f5bda991702dd0a0b69dc429ead53d69"
     },
     "tests/maintained/test_probe_cap.py": {
       "mode": 384,
