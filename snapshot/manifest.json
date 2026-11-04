@@ -388,6 +388,10 @@
       "mode": 384,
       "sha256": "884b27a7228ae0bfd1a2fcbe7f758353f0fa115cb6e673773ff80226c0a61d8d"
     },
+    "tests/maintained/test_inspect_v16.py": {
+      "mode": 384,
+      "sha256": "2e0be359c9e59e1dc47ee5361da5d2d33369a2add54632ccd8c8584b5eb7d297"
+    },
     "tests/maintained/test_probe_cap.py": {
       "mode": 384,
       "sha256": "8753b44c8cceb2e63c00e499eed2e63024f13877e33772428453a0bbf4aba8c5"
