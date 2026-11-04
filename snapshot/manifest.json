@@ -360,6 +360,10 @@
       "mode": 384,
       "sha256": "7adc463046a975a50a82a594f17e532e8a3e4e504aa10bfe89aa68b1073bda80"
     },
+    "tests/maintained/test_candidate15_unprobeable_claim.py": {
+      "mode": 384,
+      "sha256": "9dc1203d928ec1fe285b858cbb720a8fdfe2b40e803d7aa4a963cbce7cafbf8a"
+    },
     "tests/maintained/test_candidate3.py": {
       "mode": 384,
       "sha256": "20ad9268e9003244e1c89cdc7f1795914a9ccb37a16a55a85b5b833781505a34"
