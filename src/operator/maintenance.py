@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from incidents import IncidentStore
+from incidents import IncidentStore,requires_attention
 import workflow
 
 STATE=Path('/var/lib/net-gateway-agent')
@@ -145,8 +145,29 @@ def _case(case,now):
     keys=['id','key','domain','revision','status','priority','outcome','network_restored','next_review_at','actor','decided_at']
     result={key:case[key] for key in keys if key in case}
     result.update(reason=case.get('reason','')[:300],facts=copy.deepcopy(case['facts']),
-        evidence=case.get('evidence',[])[:3],requires_attention=case['status']=='open' or case['next_review_at']<=now,
+        evidence=case.get('evidence',[])[:3],requires_attention=requires_attention(case,now),
         progress=copy.deepcopy(case.get('history',[])[-1:]))
+    return result
+
+
+def context_view(previous,incidents,now):
+    """Read current case decisions without replaying observations or the worker.
+
+    A patrol evaluation is evidence from its own input revision. Chat decisions
+    cannot make that old evaluation current merely by invalidating a cache.
+    """
+    result=copy.deepcopy(previous)
+    records=incidents['cases']+incidents.get('overflow_cases',[])
+    current=[_case(case,now) for case in records]
+    identity=lambda rows:{row['id']:(row['revision'],row.get('requires_attention')) for row in rows}
+    matches=identity(result.get('cases',[]))==identity(current)
+    result['cases']=current;result['total_cases']=len(current)
+    result['requires_attention']=bool(result.get('faults') or any(case['requires_attention'] for case in current))
+    result['workflow_evaluation_current']=matches
+    if not matches and isinstance(result.get('workflow'),dict):
+        result['last_workflow_evaluation']=result['workflow']
+        result['workflow']={key:result['workflow'][key] for key in ['active','version','maintenance_required','failures'] if key in result['workflow']}
+        result['evaluation_scope']='Current case decisions; previous workflow result awaits the next patrol evaluation.'
     return result
 
 

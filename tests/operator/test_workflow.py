@@ -11,7 +11,8 @@ import unittest
 from unittest.mock import patch
 
 MODULE = Path(__file__).resolve().parents[2] / 'src/operator/workflow.py'
-MAINTAINED = MODULE.parent.parent / 'maintained/workflow.py'
+# Host/default rotation is independent of later user-maintained policies.
+MAINTAINED = MODULE.parent.parent / 'maintained/workflow-default.py'
 
 
 def snapshot():

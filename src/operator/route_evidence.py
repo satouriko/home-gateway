@@ -27,6 +27,7 @@ from user_policy import AUTO_CONTROL_DOMAINS
 
 MAX_BYTES=2*1024*1024
 MAX_SOURCE_BYTES=65536
+MAX_RAW_HTML_BYTES=1024*1024
 MAX_AGE=7*86400
 
 
@@ -42,11 +43,12 @@ def public_url(url,blocked_hosts=()):
 
 
 class _Text(HTMLParser):
+    NON_BODY_TAGS={'head','script','style','template','svg','canvas'}
     def __init__(self):super().__init__();self.parts=[];self.skip=0
     def handle_starttag(self,tag,attrs):
-        if tag in ('script','style'):self.skip+=1
+        if tag in self.NON_BODY_TAGS:self.skip+=1
     def handle_endtag(self,tag):
-        if tag in ('script','style'):self.skip=max(0,self.skip-1)
+        if tag in self.NON_BODY_TAGS:self.skip=max(0,self.skip-1)
     def handle_data(self,data):
         if not self.skip:self.parts.append(data)
 
@@ -68,12 +70,15 @@ def fetch_public(url):
         if response.status!=200:raise ValueError('source retrieval did not return HTTP 200')
         kind=response.getheader('Content-Type','').lower()
         if not any(x in kind for x in ('text/html','text/plain','application/json','text/markdown')):raise ValueError('unsupported public source type')
-        raw=response.read(MAX_SOURCE_BYTES+1)
-        if len(raw)>MAX_SOURCE_BYTES:raise ValueError('source exceeds evidence byte limit')
+        raw_limit=MAX_RAW_HTML_BYTES if 'html' in kind else MAX_SOURCE_BYTES
+        raw=response.read(raw_limit+1)
+        if len(raw)>raw_limit:raise ValueError('raw source exceeds evidence byte limit')
         text=raw.decode('utf-8','replace')
         if 'html' in kind:
-            parser=_Text();parser.feed(text);text=' '.join(parser.parts)
-        return ' '.join(text.split())
+            parser=_Text();parser.feed(text);parser.close();text=' '.join(parser.parts)
+        text=' '.join(text.split())
+        if len(text.encode('utf-8'))>MAX_SOURCE_BYTES:raise ValueError('normalized source text exceeds evidence byte limit')
+        return text
     finally:connection.close()
 
 

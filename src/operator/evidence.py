@@ -156,7 +156,7 @@ def _observation_row_summary(row,value,section):
 def _source_control_summary(value):
     value=_dict(value)
     result=_pick(value,['available','pending','phase','head','repository_url','branch','expected_branch','result',
-        'last_attempt_at','last_success_at','local_commit','remote_commit','verification','error_code',
+        'last_attempt_at','last_success_at','local_commit','remote_commit','verification','error_code','error_stage',
         'acknowledged_request','acknowledged_commit','acknowledged_versions'])
     if 'recent_publications' in value:
         rows=_list(value['recent_publications'])
@@ -216,13 +216,16 @@ def _incidents(value,now=None):
     records=[r for r in records if isinstance(r,dict)]
     def rank(case):
         due=case.get('next_review_at')
-        return (case.get('priority')!='urgent',case.get('status')=='closed',
+        return (case.get('status')=='closed' and case.get('network_restored') is True,case.get('priority')!='urgent',case.get('status')=='closed',
                 not (isinstance(due,(float,int)) and isinstance(now,(float,int)) and due<=now),
                 due if isinstance(due,(float,int)) else float('inf'),str(case.get('id','')))
     selected=sorted(records,key=rank)[:12]
     return {'cases':[incident_summary(r) for r in selected],'total_count':len(records),
-            'more_count':len(records)-len(selected),'urgent_count':sum(r.get('priority')=='urgent' for r in records),
+            'more_count':len(records)-len(selected),'urgent_count':sum(r.get('priority')=='urgent' and not (r.get('status')=='closed' and r.get('network_restored') is True) for r in records),
             'unresolved_count':sum(r.get('status')!='closed' for r in records),
+            'disposed_count':sum(r.get('status')=='closed' for r in records),
+            'verified_restored_count':sum(r.get('status')=='closed' and r.get('network_restored') is True for r in records),
+            'disposed_unverified_count':sum(r.get('status')=='closed' and r.get('network_restored') is not True for r in records),
             'capacity_exceeded':_dict(value).get('capacity_exceeded',False),
             'detail_ref':_ref(value,'incidents')}
 
@@ -252,7 +255,10 @@ def diagnosis_summary(diagnosis):
 def _maintenance(value,now=None):
     value=_dict(value)
     result=_pick(value,['requires_attention','workflow','path_health','routing','faults','pending_signals',
-                        'next_check_seconds','migration_complete','evidence_gaps'])
+                        'next_check_seconds','migration_complete','evidence_gaps','workflow_evaluation_current','evaluation_scope'])
+    if 'last_workflow_evaluation' in value:
+        result['last_workflow_evaluation']={**_pick(_dict(value['last_workflow_evaluation']),['version','result']),
+            'scope':'historical input; current case decisions are in incidents'}
     cases=_incidents(value.get('cases',[]),now)
     result.update(cases=cases['cases'],case_more_count=cases['more_count'],urgent_count=cases['urgent_count'],
                   detail_ref=_ref(value,'maintenance'))

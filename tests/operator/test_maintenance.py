@@ -15,6 +15,27 @@ except ModuleNotFoundError:maintenance=None
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_chat_context_uses_current_decisions_and_labels_stale_workflow_result(self):
+        self.diagnosis['business_observations']={'issues':[self.issue()],'checks':{}}
+        previous=self.observe();case=previous['cases'][0]
+        self.assertEqual(previous['workflow']['result']['wake'],'urgent')
+        decided=self.decide(case)
+        current=maintenance.context_view(previous,self.store.list(self.now+1),self.now+1)
+        self.assertEqual(current['cases'][0]['revision'],decided['revision'])
+        self.assertEqual(current['cases'][0]['priority'],'normal')
+        self.assertFalse(current['requires_attention'])
+        self.assertFalse(current['workflow_evaluation_current'])
+        self.assertNotIn('result',current['workflow'])
+        self.assertEqual(current['last_workflow_evaluation']['result']['wake'],'urgent')
+        self.assertEqual(previous['cases'][0]['priority'],'urgent')
+
+    def test_chat_context_does_not_mute_urgent_review_deadline_or_reexecute_workflow(self):
+        self.diagnosis['business_observations']={'issues':[self.issue()],'checks':{}}
+        previous=self.observe();case=previous['cases'][0];self.decide(case,status='blocked',due=120)
+        current=maintenance.context_view(previous,self.store.list(self.now+121),self.now+121)
+        self.assertTrue(current['requires_attention']);self.assertTrue(current['cases'][0]['requires_attention'])
+        self.assertEqual(current['cases'][0]['priority'],'urgent')
+
     def setUp(self):
         self.assertIsNotNone(maintenance,'maintenance integration helper must exist')
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -32,7 +53,7 @@ class MaintenanceTests(unittest.TestCase):
         return maintenance.observe(self.state,self.diagnosis,self.now if now is None else now,
             preferences={'routing_strategy':'respect-current-intent'},directory=self.directory,inspect=inspect or self.policy)
     def decide(self,case,status='closed',outcome='no_route_remedy',due=600):
-        return self.store.decide(case['id'],case['revision'],{'status':status,'outcome':outcome,
+        return self.store.decide(case['id'],case['revision'],{'status':status,'outcome':outcome,'priority':'normal' if status=='closed' and outcome!='fixed' else case['priority'],
             'reason':'Both paths fail this endpoint while independent positive controls pass; review evidence again.',
             'evidence':['compare:current','controls:healthy'],'next_review_at':self.now+due},'session-investigator',self.now)
     def test_production_snapshot_runs_real_publisher_and_retains_controls_and_preferences(self):

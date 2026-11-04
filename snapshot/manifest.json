@@ -122,7 +122,7 @@
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
-      "sha256": "d2f3e178385a9706ab4de273865c1a54b9ae65d43aa16c133ac3babe239ab973"
+      "sha256": "0968a61ea8dc9e35d6b9f53e0cc07108dcf0712aebafa9870b9835c087e1cbd0"
     },
     "preferences/audit-plan.json": {
       "mode": 384,
@@ -238,7 +238,11 @@
     },
     "src/dsh/operator.mjs": {
       "mode": 420,
-      "sha256": "8f8f3a5af5f0ae33bee5291abc1461ba6d28117b23963dabdb4fa6f0ccc43f34"
+      "sha256": "e0bf3d776d5300d0818a9c36aa9c72e83f70c9df3a65e245dc4905df32f4e4dc"
+    },
+    "src/dsh/routing-request.mjs": {
+      "mode": 420,
+      "sha256": "92642805bd9d049244f6f613a8b1785b7d0cb73b62a939a80ab4b4b901782ed1"
     },
     "src/dsh/skill/SKILL.md": {
       "mode": 420,
@@ -286,7 +290,7 @@
     },
     "src/operator/broker.py": {
       "mode": 420,
-      "sha256": "d44953e834bd460ae124ca457c2457b3d40fdbd3072e09a73d07be0a015d0657"
+      "sha256": "a839fddd353610f3d273b24bcf85f824c94ef4f826dbd8e7a6a822df0ac3b7dd"
     },
     "src/operator/business_probe.py": {
       "mode": 420,
@@ -300,6 +304,10 @@
       "mode": 420,
       "sha256": "3da5e2ed450ffd02120e653df6c60d29dcc1942301093a31f571eaa9060bcf1f"
     },
+    "src/operator/context_cache.py": {
+      "mode": 420,
+      "sha256": "22733247258820a2892d474aa3a970401bcc879c6e734cc979ae7dbdd3a41d05"
+    },
     "src/operator/control_route.py": {
       "mode": 493,
       "sha256": "c93c58daa0300a0713326d6bc63360edaab1ce00639ad46adee43181edbbac3a"
@@ -310,7 +318,7 @@
     },
     "src/operator/evidence.py": {
       "mode": 420,
-      "sha256": "53f303cf102388a62ec1bc85474ee5bafc195cc6b6bedf62c39ccd36af13a86e"
+      "sha256": "e780b8907395b08e03741906d844af6ec7a0a258db1545cf1ceebe768fe767c6"
     },
     "src/operator/extensions.py": {
       "mode": 420,
@@ -318,11 +326,11 @@
     },
     "src/operator/incidents.py": {
       "mode": 420,
-      "sha256": "d42ec4f60c94d5ade0187534113a60cd6496d1bd05ca8f6f8bdeffb370342898"
+      "sha256": "2ce849ac76749565d1f3fc5efa652af975dc7b2a12694b36d1019296c4bf075e"
     },
     "src/operator/maintenance.py": {
       "mode": 420,
-      "sha256": "96d789dbb26db387726d8fab0cf49535801f5f629b603909cba99028b8f9795e"
+      "sha256": "74b4a955ac3615d78d21a6ce001922b4c7a4790839128561987145e57d8f8876"
     },
     "src/operator/native_jobs.py": {
       "mode": 420,
@@ -338,11 +346,11 @@
     },
     "src/operator/patrol.py": {
       "mode": 420,
-      "sha256": "32fa44c9c180aa9b4eefa37eeebbd57fae7e4990714dd2e47d732bd90abd74c9"
+      "sha256": "cd90bbabe2c84f849c54467f958b8bba6cd61564e27edf9e19514439cdb7ef35"
     },
     "src/operator/policy.py": {
       "mode": 420,
-      "sha256": "aff6ce86620fed5ba7982070d4406d2beed668e22ecdbf879508daa39ee3238f"
+      "sha256": "8fb49065167d04c39c554a65499a25b5cad98deab57b15020af5df75b3edb0ca"
     },
     "src/operator/pricing.py": {
       "mode": 493,
@@ -354,11 +362,11 @@
     },
     "src/operator/programs.py": {
       "mode": 493,
-      "sha256": "df26dc1a87e91ecd922b4ed2bcdc344a39df469bc9fcf1f35c879240602477fa"
+      "sha256": "6029c8ec3833b78acbef22de5052be34df2836df0f71d1603b08ee2ce7501ce9"
     },
     "src/operator/route_evidence.py": {
       "mode": 420,
-      "sha256": "8b16f9256eca12b2f7704613d7797909971890d7c6ca3da28650708f74d287f1"
+      "sha256": "1267526b18eb097ca39c190cf4d31f300972a286573e62d3868d5b42fd531c87"
     },
     "src/operator/route_transaction.py": {
       "mode": 420,
@@ -386,7 +394,7 @@
     },
     "src/operator/source_sync.py": {
       "mode": 420,
-      "sha256": "6dabb73de5f2133c1c6049995ee9b506cb8767fb09d258c25338358a3e63cbb8"
+      "sha256": "ca128bb491c1b789a459cb7405333542fa3473b4c2627c773127088c9f9bc018"
     },
     "src/operator/storage.py": {
       "mode": 493,
@@ -406,7 +414,7 @@
     },
     "src/operator/workflow.py": {
       "mode": 420,
-      "sha256": "3fe88c21d15e05192f83321f379183b941e7c0e851e4f49bb05d4ddcf10f09b1"
+      "sha256": "64b2c388aa7aec1fbf5c0c9058206e3af34f6cc2982d4c70d848b0c5b623011c"
     },
     "tests/maintained/test_active_sources.py": {
       "mode": 420,

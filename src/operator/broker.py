@@ -22,7 +22,8 @@ import uuid
 import fcntl
 import stat
 import select
-from policy import validate_request, validate_baseline, recovery_due, REPAIRS, READS, INSTALL_POLICY
+import context_cache
+from policy import validate_request, validate_baseline, recovery_due, REPAIRS, READS, INSTALL_POLICY, PUBLISHES
 
 STATE = Path('/var/lib/net-gateway-agent')
 CONFIG = Path('/etc/net-gateway/config.json')
@@ -164,6 +165,14 @@ def service(name):
     result=command('systemctl','show',name,'-p','ActiveState','-p','SubState','-p','MemoryCurrent','-p','NRestarts',check=False)
     return dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)
 
+def service_summary(raw):
+    result=dict(raw);counter=result.pop('NRestarts',None)
+    try:count=int(counter)
+    except (ValueError,TypeError):count=None
+    result['automatic_restart_count']=count if count is not None and count>=0 else None
+    result['restart_counter_scope']='systemd automatic restarts only; manual and watchdog stops/starts require lifecycle evidence'
+    return result
+
 def current_policy():
     for path in [STATE/'approved-policy.json',STATE/'known-good/policy.json',STATE/'known-good-policy.json']:
         try:
@@ -233,7 +242,7 @@ def source_control_status(path=None):
         value=json.loads(path.read_text())
         if not isinstance(value,dict):return {'available':False}
         keys=['repository_url','branch','expected_branch','result','last_attempt_at','last_success_at',
-              'local_commit','remote_commit','verification','error_code','acknowledged_request']
+              'local_commit','remote_commit','verification','error_code','error_stage','acknowledged_request']
         pending=source_sync_pending(path)
         result={'available':True,'pending':pending,**{key:value[key] for key in keys if key in value}}
         result['phase']='held' if pending and SYNC_HOLD.exists() else 'pending' if pending else value.get('result','unknown')
@@ -276,6 +285,9 @@ def context_full():
         progress=json.loads(patrol.read_text())
         for key in ['maintenance','history','last_diagnosis','business_observations']:
             if key in progress:result[key]=progress[key]
+        if 'maintenance' in result and 'cases' in result['incidents']:
+            from maintenance import context_view
+            result['maintenance']=context_view(result['maintenance'],result['incidents'],result['checked_at'])
     result['probe_capabilities']={'operation':'probe_compare','paths':['direct','proxy'],'isolation':'disposable engine, separate UID route, concrete selected proxy; no household configuration changes','scope':'HTTPS root, not a logged-in client application','coding_sandbox':'capability-dropping bwrap; credentials, history and broker socket hidden'}
     changes=STATE/'deployment-events.json'
     if changes.exists():result['recent_system_changes']=json.loads(changes.read_text())[-6:]
@@ -286,13 +298,27 @@ def context_full():
     result['protected_boundary']='credentials, startup source, independent control route and recovery supervisor are not writable from maintained tools'
     return result
 
-def context():
+def _context_snapshot():
     from evidence import system_context
-    return system_context(context_full())
+    result=system_context(context_full())
+    result['context_freshness']={'volatile_sample_seconds':60,'material_state_writes':'invalidate immediately',
+        'fresh_details':'gateway_evidence and explicit diagnosis bypass the context cache'}
+    return result
+
+def context():
+    # High-frequency traffic, native heartbeats and hardware counters do not
+    # create another full model-context message on every tool step. Actual
+    # decisions, versions and patrol findings invalidate without waiting.
+    watched=[STATE/name for name in ['patrol.json','incidents.json','approved-policy.json','workflow-state.json',
+        'diagnostic-active.json','tool-active.json','audit-plan.json','publication-receipts.json',
+        'source-sync-request.json','route-evidence.json','pending.json','last-repair.json','last-recovery.json']]
+    watched.extend([CONFIG,SYNC_STATUS,SYNC_HOLD,Path('/run/net-gateway-agent/patrol-context.json'),
+                    Path('/etc/net-gateway-agent/pricing.json'),Path('/usr/local/share/net-gateway-agent/skill/SKILL.md')])
+    return context_cache.get(_context_snapshot,watched)
 
 def status():
     result={'checked_at':time.time(),'gateway_address':'192.168.2.4','upstream':'192.168.2.1',
-        'services':{name:service(name) for name in ['net-gateway.service','dsh.service']},
+        'services':{name:service_summary(service(name)) for name in ['net-gateway.service','dsh.service']},
         'free_disk_bytes':shutil.disk_usage('/').free,
         'temperature_celsius':int(Path('/sys/class/thermal/thermal_zone0/temp').read_text())/1000,
         'policy':current_policy(),
@@ -596,6 +622,8 @@ def handle(request):
         try:sync=queue_source_sync(op,request.get('session_id'),message,version=version)
         except Exception:sync={'requested':False,'retry':'independent timer'}
         result={**result,'source_control_sync':sync}
+    if op in REPAIRS|PUBLISHES|{'incident_decide','route_source','route_requirement'} or (op=='native_observe' and result.get('preference_changed')):
+        context_cache.invalidate()
     return result
 
 def envelope(request):

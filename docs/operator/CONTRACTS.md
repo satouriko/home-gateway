@@ -60,7 +60,7 @@ gateway_audit_plan 可查询或调整审计间隔、常规任务日预算、选�
 
 ## 程序与偏好同步
 
-实时系统上下文的 source_control 是同步状态来源，包含 repository_url、branch、result、last_attempt_at、last_success_at、local_commit、remote_commit 和 error_code。remote_commit 只表示最近一次成功推送的提交，不表示此后刚发布的内容已经同步。状态不可用或 result=failed 时保持未确认，不能拿本地发布成功代替远端推送成功。同步由受保护程序完成，不读取推送私钥或模型凭据来手工试错。
+实时系统上下文的 source_control 是同步状态来源，包含 repository_url、branch、result、last_attempt_at、last_success_at、local_commit、remote_commit、error_code 和 error_stage。remote_commit 只表示最近一次成功推送的提交，不表示此后刚发布的内容已经同步。状态不可用或 result=failed 时保持未确认，不能拿本地发布成功代替远端推送成功。同步由受保护程序完成，不读取推送私钥或模型凭据来手工试错。
 
 正式发布或已验收偏好更新会返回 source_control_sync 并自动触发同步，无需维护者手动推送。source_control.pending=true 表示持久发布请求尚未被成功推送确认；acknowledged_request 是成功同步所对应的请求。发布期间的新请求继续排队；失败保留请求并由独立定时器重试，不把 GitHub 的故障变成本地发布失败。
 
@@ -97,7 +97,7 @@ gateway(probe_compare,target=域名,endpoint=JSON) 在独立受保护引擎中�
 
 gateway_incidents(list/get/decide) 维护跨新会话的事件。每项有稳定id、revision、事实、历史、priority、status、reason、evidence、next_review_at。decide使用刚读到的revision，证据变动会拒绝旧决定。status为open/working/verifying/blocked/closed，priority为urgent/normal，两者独立。
 
-decide的decision JSON必须有reason、1至8个证据引用、未来Unix秒next_review_at。closed另需outcome=fixed/not_a_problem/no_route_remedy/external_dependency；fixed必须已有current_failure=false及verified_recovery=true的真实观测，不允许关闭复发检测。其他结论不代表业务恢复。urgent处理中/验证中/阻塞的复查不超过15分钟；未到有效租约不重复唤醒，到期、修复失败或重要新证据继续接管。正常路径健康统计不受旧业务事件污染。容量和文件损坏是明确维护故障，待处理证据不会静默丢弃。
+decide的decision JSON必须有reason、1至8个证据引用、未来Unix秒next_review_at。closed另需outcome=fixed/not_a_problem/no_route_remedy/external_dependency；fixed必须已有current_failure=false及verified_recovery=true的真实观测，不允许关闭复发检测。其他结论不代表业务恢复。关闭未修复事件必须明确给出当前 priority；not_a_problem 必须明确 normal。所有尚未证实恢复的 urgent 事件（包括暂无法修复或等待外部恢复）复查不超过15分钟；未到有效租约不重复唤醒，到期、修复失败或重要新证据继续接管。正常路径健康统计不受旧业务事件污染。容量和文件损坏是明确维护故障，待处理证据不会静默丢弃。
 
 gateway_workflow(status/test/publish) 维护实际巡检的纯函数inspect(snapshot)，不同于只给建议的gateway_program。snapshot含schema_version=1、now、path_health={hard_faults,checks}、incidents（含requires_attention）、observations、routing（含当前preferences/routing_strategy）、audit。返回且仅返回summary、wake=none/routine/urgent、incident_ids、probe_domains、route_candidates、next_check_seconds。最多16个事件、各3个域名，检查建议30至900秒；实际采样受宿主定时器节奏限制。新的紧急关注及硬故障不能被策略抹去。坏代码回退前版，输入契约异常保留好版本并报维护故障。
 
@@ -118,3 +118,9 @@ evaluate使用独立比较evidence_ids和business_requirement_evidence_ids，按
 publish/apply/set在现有模型轮次中提供commit_message。格式为中文Conventional Commit标题、空行、技术背景段落、按模块分组的行为/文档/测试，最后“验证：”实际结果。发布前在会话展示；不放凭据或私人日志。格式或敏感内容不合格会在改正式文件前拒绝。同步按实际导出版本/暂存文件匹配说明；已替代版本的文字不能套到新文件，也不会额外花一次AI调用写提交。
 
 可公开维护测试以首8行内“# gateway-public-test: 1”标记，从Path(__file__).resolve().parents[2]定位src/maintained和src/operator，只使用公开源码与合成样本。不能依赖私人candidate路径、凭据或生产网络。有限导出会在无主机数据/网络、受限CPU/内存/输出的沙箱执行实际导出字节，失败不提交。旧的不可移植测试给出明确排除收据，不冒充通过；可用回归已转为当前公开源码的实际验收测试。
+
+上下文中的 automatic_restart_count 只统计 systemd 自动重启计数，不能据此推断没有人工重启、看门狗恢复或进程退出；相关事实读取 runtime_facts 的生命周期记录。摘要最多缓存60秒，事件、策略、发布或恢复状态变动会立即失效；时间、内存等普通波动不应让每个推理步骤追加重复大段上下文。
+
+当前 maintenance.cases 读取实时事件决定；workflow_evaluation_current=false 表示事件修订或复查期限已变，上一轮策略结论仅放在 last_workflow_evaluation 并明确标记历史。不能把历史 wake 或事件修订作为当前故障。下一次后台巡检负责重新执行工作流。
+
+纯诊断程序的输入使用有限JSON与512KiB字节上限；宿主观测过大或格式错误会明确报告 input_unavailable 并保留有效程序，继续通过维护故障复核。不能把输入失败当成代码失败而删除有效发布。

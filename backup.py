@@ -25,9 +25,9 @@ from bounded import run as bounded_run
 CODE = ('user_policy.py patrol.py bounded.py policy.py extensions.py programs.py broker.py '
         'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py overview.py traffic.py traffic_collector.py business_probe.py business_watch.py probe_transport.py source_sync.py sandbox_runner.py node_health.py '
         'commit_messages.py maintenance.py incidents.py workflow.py evidence.py runtime_facts.py '
-        'adaptive_routing.py route_evidence.py route_transaction.py routing_control.py run_metrics.py').split()
+        'adaptive_routing.py route_evidence.py route_transaction.py routing_control.py run_metrics.py context_cache.py').split()
 DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'native-maintenance.mjs', 'broker-client.mjs', 'maintenance-prompt.txt', 'BACKGROUND.md', 'skill/SKILL.md',
-        'sync-notices.mjs', 'network-overview/package.json', 'network-overview/index.mjs', 'network-overview/client.js']
+        'sync-notices.mjs', 'routing-request.mjs', 'network-overview/package.json', 'network-overview/index.mjs', 'network-overview/client.js']
 UNITS = ('net-gateway-control-route.service net-gateway-agent.service net-gateway-ai-patrol.service '
          'net-gateway-patrol.timer net-gateway-traffic.service dsh.service net-gateway.service net-gateway-maintain.service '
          'net-gateway-maintain.timer net-gateway-storage.service net-gateway-storage.timer '
@@ -388,12 +388,35 @@ def repository_scan(repository):
 
 
 def git(repository, *args):
-    return subprocess.run(['git', '-C', str(repository), *args], check=True, capture_output=True,
-                          text=True, timeout=60)
+    stage = args[0] if args and args[0] in {'fetch', 'push', 'commit', 'add', 'merge'} else 'inspect'
+    try:
+        return subprocess.run(['git', '-C', str(repository), *args], check=True, capture_output=True,
+                              text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise GitSyncError('git_transport_failed', stage) from None
+    except subprocess.CalledProcessError as error:
+        diagnostic = (error.stderr or '').lower()
+        if any(text in diagnostic for text in ('permission denied (publickey)', 'authentication failed', 'could not read username')):
+            reason = 'git_auth_failed'
+        elif any(text in diagnostic for text in ('could not resolve host', 'could not resolve hostname')):
+            reason = 'git_dns_failed'
+        elif any(text in diagnostic for text in ('timed out', 'connection refused', 'connection reset', 'network is unreachable', 'connection closed')):
+            reason = 'git_transport_failed'
+        else:
+            reason = 'git_push_failed' if stage == 'push' else 'git_operation_failed'
+        # Do not carry private stderr, command arguments or credential URLs into
+        # the operator's status/receipt. The original process error stays local.
+        raise GitSyncError(reason, stage) from None
 
 
 class SyncError(ValueError):
     """A safe reason code for the operator, without command output or credentials."""
+
+
+class GitSyncError(SyncError):
+    def __init__(self, reason, stage):
+        super().__init__(reason)
+        self.stage = stage
 
 
 def verify_staged_snapshot(repository, files):
@@ -447,7 +470,8 @@ def sync_status(path, repository, error=None, request_id=None, versions=None):
                   local_commit=git(repository, 'rev-parse', 'HEAD').stdout.strip(),
                   verification='last successful Git push',
                   attempted_request=request_id,
-                  error_code=str(error) if isinstance(error, SyncError) else type(error).__name__ if error else None)
+                  error_code=str(error) if isinstance(error, SyncError) else type(error).__name__ if error else None,
+                  error_stage=error.stage if isinstance(error, GitSyncError) else None)
     if error is None:
         status.update(last_success_at=now, remote_commit=status['local_commit'])
         if request_id is not None: status['acknowledged_request']=request_id

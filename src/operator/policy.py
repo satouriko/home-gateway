@@ -42,7 +42,7 @@ def validate_request(request):
     if operation in ['skill_test','skill_publish']:allowed.update(['deadline','maintenance_session'])
     if operation in PUBLISHES:allowed.update(['session_id','commit_message'])
     if set(request) - allowed:
-        raise ValueError('unexpected fields')
+        raise ValueError('unexpected fields for '+operation+'; accepted fields: '+', '.join(sorted(allowed)))
     result = {'operation': operation}
     if operation=='source_sync_notice_ack':
         from source_sync import valid_session

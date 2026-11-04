@@ -242,6 +242,8 @@ def main():
     try:preferences=json.loads(approved.read_text()).get('preferences',{}) if approved.exists() else diagnosis.get('status',{}).get('policy',{}).get('preferences',{})
     except (ValueError,OSError):
         preferences={};diagnosis['maintenance_input_errors']=['preferences_storage']
+    if program.get('input_unavailable'):
+        diagnosis.setdefault('maintenance_input_errors',[]).append('diagnostic_input')
     upkeep=maintenance.observe(state,diagnosis,now,preferences=preferences,directory=STATE)
     if execute_workflow(state,diagnosis,upkeep,now):
         upkeep=maintenance.observe(state,diagnosis,now,preferences=preferences,directory=STATE)

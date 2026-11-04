@@ -11,6 +11,25 @@ from patrol import should_run_ai, repair_choice, fault_signature, preempt_needed
 from test_broker import healthy_result
 
 class PatrolTests(unittest.TestCase):
+    def test_diagnostic_input_fault_survives_confirmation_and_repair_verification(self):
+        import patrol
+        class Captured(Exception):pass
+        for transition in ['confirmation','repair']:
+            with self.subTest(transition=transition),tempfile.TemporaryDirectory() as folder:
+                bad=healthy_result();bad['checks']['mainland_https']={'ok':False,'error':'timeout'}
+                diagnoses=[bad,healthy_result()]
+                def call(request):
+                    if request['operation']=='diagnose':return copy.deepcopy(diagnoses.pop(0))
+                    if request['operation']=='traffic_status':return {'status':'observed','domains':[]}
+                    if request['operation']=='restore_gateway':return {'verification':healthy_result()}
+                    if request['operation']=='quality':return {}
+                    raise AssertionError(request)
+                def capture(state,diagnosis,*args,**kwargs):
+                    self.assertIn('diagnostic_input',diagnosis.get('maintenance_input_errors',[]))
+                    raise Captured()
+                with patch.object(patrol,'STATE',Path(folder)),patch.object(patrol,'call',side_effect=call),patch.object(patrol,'inspect_active',return_value={'active':True,'version':'good','input_unavailable':True}),patch.object(patrol,'repair_choice',return_value='restore_gateway' if transition=='repair' else None),patch.object(patrol.maintenance,'observe',side_effect=capture):
+                    with self.assertRaises(Captured):patrol.main()
+
     def test_workflow_selected_target_controls_actual_endpoint_probes_and_shared_budget(self):
         import patrol
         now=1800000000;endpoint={'network':'tcp','port':5223,'application_protocol':'unknown'}
@@ -67,7 +86,7 @@ class PatrolTests(unittest.TestCase):
                 first=maintenance.observe(state,{**diagnosis,'business_observations':business},now,directory=directory,inspect=policy)
                 if disposed:
                     case=first['cases'][0];IncidentStore(directory/'incidents.json').decide(case['id'],case['revision'],
-                        {'status':'closed','outcome':'no_route_remedy','reason':'Both routes fail endpoint; independent controls pass',
+                        {'status':'closed','outcome':'no_route_remedy','priority':'normal','reason':'Both routes fail endpoint; independent controls pass',
                          'evidence':['compare:both-paths','controls:healthy'],'next_review_at':now+600},'investigator',now)
                 (directory/'patrol.json').write_text(json.dumps(state));(directory/'native.json').write_text('{"session_id":"native","runs":[]}')
                 def call(request):

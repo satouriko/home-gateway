@@ -37,13 +37,13 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(out['facts']['failure_count'],5)
 
     def test_changed_evidence_reopens_disposed_work_with_original_priority(self):
-        case=self.decide(self.create(),status='closed',outcome='no_route_remedy',next_review_at=self.now+3600)
+        case=self.decide(self.create(),status='closed',priority='urgent',outcome='no_route_remedy',next_review_at=self.now+600)
         changed=self.store.observe([self.signal(signature='one-route-now-works',observed_at=self.now+5)],self.now+5)['cases'][0]
         self.assertEqual(changed['id'],case['id']);self.assertEqual(changed['status'],'open')
         self.assertEqual(changed['priority'],'urgent');self.assertGreater(changed['revision'],case['revision'])
 
     def test_closing_no_routing_remedy_is_not_a_claim_of_network_repair(self):
-        case=self.decide(self.create(),status='closed',outcome='no_route_remedy',next_review_at=self.now+3600)
+        case=self.decide(self.create(),status='closed',priority='normal',outcome='no_route_remedy',next_review_at=self.now+3600)
         self.assertFalse(case['network_restored']);self.assertEqual(case['outcome'],'no_route_remedy')
         self.assertTrue(case['history'][-1]['evidence'])
 
@@ -62,7 +62,7 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(out['cases'][0]['id'],case['id']);self.assertEqual(out['cases'][0]['status'],'open')
 
     def test_closed_means_disposed_but_review_is_still_scheduled(self):
-        case=self.decide(self.create(),status='closed',outcome='not_a_problem',next_review_at=self.now+3600)
+        case=self.decide(self.create(),status='closed',priority='normal',outcome='not_a_problem',next_review_at=self.now+3600)
         self.assertEqual(self.store.attention(self.now),[])
         self.assertEqual(self.store.attention(self.now+3601)[0]['id'],case['id'])
 
@@ -84,7 +84,7 @@ class IncidentTests(unittest.TestCase):
 
     def test_capacity_keeps_urgent_disposed_cases_with_scheduled_follow_up(self):
         small=IncidentStore(self.store.path,max_cases=1)
-        case=self.create();self.decide(case,status='closed',outcome='no_route_remedy',next_review_at=self.now+600)
+        case=self.create();self.decide(case,status='closed',priority='urgent',outcome='no_route_remedy',next_review_at=self.now+600)
         out=small.observe([self.signal(key='new-case')],self.now+1)
         self.assertTrue(out['capacity_exceeded']);self.assertEqual(out['cases'][0]['id'],case['id'])
 
@@ -96,7 +96,7 @@ class IncidentTests(unittest.TestCase):
         for signature in ['dns-unavailable','changed-condition']:
             store=IncidentStore(Path(self.folder.name)/(signature+'.json'))
             case=store.observe([self.signal(priority='normal')],self.now)['cases'][0]
-            store.decide(case['id'],case['revision'],{'status':'closed','outcome':'not_a_problem','reason':'previous normal evidence','evidence':['sample:1'],'next_review_at':self.now+3600},'agent',self.now)
+            store.decide(case['id'],case['revision'],{'status':'closed','priority':'normal','outcome':'not_a_problem','reason':'previous normal evidence','evidence':['sample:1'],'next_review_at':self.now+3600},'agent',self.now)
             out=store.observe([self.signal(priority='urgent',signature=signature,observed_at=self.now+1)],self.now+1)['cases'][0]
             self.assertEqual(out['priority'],'urgent');self.assertEqual(out['status'],'open')
 
@@ -155,6 +155,62 @@ class IncidentTests(unittest.TestCase):
         self.store.path.write_text(json.dumps(raw));before=self.store.path.read_bytes()
         with self.assertRaisesRegex(ValueError,'recovery'):self.store.observe([self.signal()],self.now+1)
         self.assertEqual(self.store.path.read_bytes(),before)
+
+    def test_nonfixed_closure_requires_explicit_current_priority(self):
+        case=self.create();before=self.store.path.read_bytes()
+        for outcome in ['not_a_problem','no_route_remedy','external_dependency']:
+            with self.subTest(outcome=outcome),self.assertRaisesRegex(ValueError,'explicit.*priority'):
+                self.decide(case,status='closed',outcome=outcome)
+            self.assertEqual(self.store.path.read_bytes(),before)
+
+    def test_nonproblem_cannot_retain_current_urgent_priority(self):
+        case=self.create()
+        with self.assertRaisesRegex(ValueError,'not_a_problem.*normal'):
+            self.decide(case,status='closed',outcome='not_a_problem',priority='urgent')
+        self.assertEqual(self.store.get(case['id']),case)
+
+    def test_closed_unresolved_urgency_keeps_the_fifteen_minute_bound(self):
+        for outcome in ['no_route_remedy','external_dependency']:
+            with self.subTest(outcome=outcome):
+                case=self.create()
+                with self.assertRaisesRegex(ValueError,'fifteen minutes'):
+                    self.decide(case,status='closed',outcome=outcome,priority='urgent',next_review_at=self.now+901)
+                decided=self.decide(case,status='closed',outcome=outcome,priority='urgent',next_review_at=self.now+900)
+                self.assertEqual(self.store.attention(self.now+899),[])
+                self.assertEqual(self.store.attention(self.now+900)[0]['id'],decided['id'])
+
+    def test_verified_fixed_history_can_keep_urgent_with_a_long_review(self):
+        case=self.store.observe([self.signal(facts={'current_failure':False,'verified_recovery':True})],self.now)['cases'][0]
+        fixed=self.decide(case,status='closed',outcome='fixed',next_review_at=self.now+72*3600)
+        self.assertEqual(fixed['priority'],'urgent');self.assertTrue(fixed['network_restored'])
+        self.assertEqual(self.store.attention(self.now),[])
+
+    def test_legacy_four_dispositions_require_read_only_triage_then_actor_cas(self):
+        patterns=[('target','no_route_remedy',12),('benign-a','not_a_problem',72),
+                  ('benign-b','not_a_problem',72),('upstream','external_dependency',24)]
+        self.store.observe([self.signal(key=key) for key,_,_ in patterns],self.now)
+        raw=json.loads(self.store.path.read_text())
+        for key,outcome,hours in patterns:
+            case=next(c for c in raw['cases'].values() if c['key']==key)
+            case.update(status='closed',outcome=outcome,revision=2,decided_at=self.now,
+                        next_review_at=self.now+hours*3600,actor='original-agent',
+                        reason='original disposition',evidence=['original:1'],reopen_on_activity=False,
+                        history=[{'kind':'disposition','actor':'original-agent','priority':'urgent','outcome':outcome}])
+        self.store.path.write_text(json.dumps(raw));before=self.store.path.read_bytes()
+        attention=self.store.attention(self.now+1)
+        self.assertEqual({c['key'] for c in attention},{'target','benign-a','benign-b','upstream'})
+        self.assertEqual(self.store.path.read_bytes(),before)
+        # A bad original lease still needs triage when its remaining time falls below fifteen minutes.
+        self.assertIn('target',{c['key'] for c in self.store.attention(self.now+12*3600-30)})
+        for case in attention:
+            corrected=self.decide(case,status='closed',outcome=case['outcome'],priority='normal',
+                                  reason='Fresh evidence shows no urgent user impact; retain cheap review.',
+                                  next_review_at=self.now+3600)
+            self.assertEqual(corrected['revision'],3);self.assertEqual(corrected['source_priority'],'urgent')
+            self.assertEqual(corrected['history'][0]['actor'],'original-agent')
+            self.assertEqual(corrected['history'][-1]['actor'],'test-agent')
+            self.assertFalse(corrected['network_restored'])
+        self.assertEqual(self.store.attention(self.now+1),[])
 
 
 if __name__=='__main__':unittest.main()

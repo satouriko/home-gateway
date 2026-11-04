@@ -1,8 +1,27 @@
 import unittest
+import json
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 from programs import validate_source, validate_output,evaluate
 
 class ProgramBoundaryTests(unittest.TestCase):
+    def test_real_worker_accepts_bounded_observation_growth(self):
+        source="def inspect(snapshot):\n return {'summary':'real child','action':'none','probe_domains':[]}\n"
+        with patch('programs.os.geteuid',return_value=1000):
+            self.assertEqual(evaluate(source,{'observations':{'sample':'a'*180000}})['summary'],'real child')
+
+    def test_input_budget_failure_keeps_the_valid_published_program(self):
+        import programs
+        source="def inspect(snapshot):\n return {'summary':'ok','action':'none','probe_domains':[]}\n"
+        with tempfile.TemporaryDirectory() as folder,patch.object(programs,'STATE',Path(folder)):
+            active=Path(folder)/'diagnostic-active.json'
+            active.write_text(json.dumps({'version':'good','source':source,'tests':[]}));before=active.read_bytes()
+            result=programs.inspect_active({'observations':{'sample':'a'*(600*1024)}})
+            self.assertTrue(result['active']);self.assertTrue(result['input_unavailable'])
+            self.assertEqual(result['version'],'good');self.assertEqual(active.read_bytes(),before)
+            self.assertNotIn('rolled_back',result)
+
     def test_publisher_rejects_health_only_program_that_misses_real_client_issue(self):
         import programs
         source="def inspect(s):\n return {'summary':'ok','action':'recheck_nodes' if s.get('checks',{}).get('proxy_https',{}).get('ok') is False else 'none','probe_domains':[]}"

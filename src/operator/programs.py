@@ -12,6 +12,17 @@ import sys
 import time
 
 STATE=Path('/var/lib/net-gateway-agent')
+INPUT_LIMIT=512*1024
+
+class InputError(ValueError):
+    """Host observation failures must not invalidate a published program."""
+
+def request_data(source,snapshot):
+    try:data=json.dumps({'source':source,'snapshot':snapshot},ensure_ascii=False,allow_nan=False)
+    except (ValueError,TypeError,RecursionError):raise InputError('diagnostic input must be finite JSON') from None
+    if len(data.encode())>INPUT_LIMIT:raise InputError('diagnostic input exceeds byte budget')
+    return data
+
 FUNCTIONS={'len','min','max','sum','sorted','round','str','int','float','bool','list','dict','set','tuple','any','all','range','enumerate','zip','abs'}
 ALLOWED=(ast.Module,ast.FunctionDef,ast.arguments,ast.arg,ast.Return,ast.If,ast.For,ast.Assign,ast.AugAssign,ast.Expr,
  ast.Call,ast.Name,ast.Load,ast.Store,ast.Constant,ast.Dict,ast.List,ast.Tuple,ast.Set,ast.Subscript,ast.Slice,ast.Attribute,
@@ -67,9 +78,10 @@ def worker(source,snapshot):
 def evaluate(source,snapshot):
     from bounded import run as bounded_run
     validate_source(source)
+    data=request_data(source,snapshot)
     args=[sys.executable,'-I',str(Path(__file__).resolve()),'--worker']
     if os.geteuid()==0:args=['/usr/sbin/runuser','-u','dsh','--',*args]
-    result=bounded_run(args,input=json.dumps({'source':source,'snapshot':snapshot}),timeout=4,
+    result=bounded_run(args,input=data,timeout=4,
         env={'PATH':'/usr/bin:/bin','HOME':'/var/empty','LANG':'C.UTF-8'})
     if result.returncode:raise ValueError('diagnostic failed in its resource-limited worker: '+result.stderr[-1200:])
     return validate_output(json.loads(result.stdout))
@@ -113,6 +125,9 @@ def inspect_active(snapshot):
     if not active.exists():return {'active':False}
     current=json.loads(active.read_text())
     try:return {'active':True,'version':current['version'],'result':evaluate(current['source'],snapshot)}
+    except InputError:
+        return {'active':True,'version':current['version'],'input_unavailable':True,'maintenance_required':True,
+                'input_error':'diagnostic_snapshot_unavailable'}
     except Exception:
         previous=STATE/'diagnostic-previous.json'
         if previous.exists():write_json(active,json.loads(previous.read_text()));previous.unlink()
@@ -122,7 +137,7 @@ def inspect_active(snapshot):
 if __name__=='__main__' and '--worker' in sys.argv:
     resource.setrlimit(resource.RLIMIT_AS,(128*1024*1024,128*1024*1024))
     resource.setrlimit(resource.RLIMIT_CPU,(1,1));resource.setrlimit(resource.RLIMIT_FSIZE,(0,0));signal.alarm(3)
-    data=sys.stdin.read(131073)
-    if len(data)>131072:raise ValueError('input budget exceeded')
+    data=sys.stdin.buffer.read(INPUT_LIMIT+1)
+    if len(data)>INPUT_LIMIT:raise ValueError('input budget exceeded')
     request=json.loads(data)
     print(json.dumps(worker(request['source'],request['snapshot']),ensure_ascii=False))

@@ -30,6 +30,19 @@ def decision_facts(facts):
     return {k:v for k,v in facts.items() if k not in {'failure_count','last_seen','connections_seen','observed_bytes_lower_bound'}}
 
 
+def requires_attention(case,now):
+    """Include inconsistent legacy urgency for actor triage without changing its record."""
+    if not finite(now):raise ValueError('valid review time required')
+    due=case.get('next_review_at',0)
+    if case['status']=='open' or due<=now:return True
+    if case['status']!='closed' or case.get('priority')!='urgent':return False
+    if case.get('outcome')=='not_a_problem':return True
+    if case.get('outcome') in ['no_route_remedy','external_dependency']:
+        decided=case.get('decided_at',case.get('updated_at'))
+        return not finite(decided) or due>decided+900
+    return False
+
+
 def validate_records(data):
     for field in ['cases','overflow_cases']:
         records=data.get(field,{})
@@ -163,12 +176,16 @@ class IncidentStore:
             case=data['cases'].get(ident) or data.get('overflow_cases',{}).get(ident)
             if case is None:raise ValueError('incident not found')
             if type(revision) is not int or case['revision']!=revision:raise ValueError('incident revision changed; read current evidence')
-            priority=decision.get('priority',case['priority'])
-            if priority not in ['urgent','normal']:raise ValueError('valid priority required')
-            if priority=='urgent' and status in ['working','verifying','blocked'] and due>now+900:
-                raise ValueError('urgent work requires follow-up within fifteen minutes')
             outcome=decision.get('outcome') if status=='closed' else None
             if status=='closed' and outcome not in OUTCOMES:raise ValueError('explicit disposition outcome required')
+            if status=='closed' and outcome!='fixed' and 'priority' not in decision:
+                raise ValueError('explicit current priority required for non-fixed closure')
+            priority=decision.get('priority',case['priority'])
+            if priority not in ['urgent','normal']:raise ValueError('valid priority required')
+            if outcome=='not_a_problem' and priority!='normal':raise ValueError('not_a_problem requires explicit normal priority')
+            unresolved=status!='closed' or outcome in ['no_route_remedy','external_dependency']
+            if priority=='urgent' and unresolved and due>now+900:
+                raise ValueError('urgent work requires follow-up within fifteen minutes')
             restored=outcome=='fixed'
             if restored and not (case['facts'].get('current_failure') is False and case['facts'].get('verified_recovery') is True):
                 raise ValueError('network restoration needs current verification evidence')
@@ -185,4 +202,4 @@ class IncidentStore:
     def attention(self,now):
         if not finite(now):raise ValueError('valid review time required')
         view=self.list(now)
-        return [case for case in view['cases']+view['overflow_cases'] if case['status']=='open' or case.get('next_review_at',0)<=now]
+        return [case for case in view['cases']+view['overflow_cases'] if requires_attention(case,now)]

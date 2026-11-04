@@ -14,6 +14,19 @@ SPEC.loader.exec_module(backup)
 
 
 class PublicBackupTests(unittest.TestCase):
+    def test_git_auth_failure_exposes_safe_stage_without_private_diagnostics(self):
+        failure=subprocess.CalledProcessError(128,['git'],stderr='Permission denied (publickey). private transport detail')
+        with patch.object(backup.subprocess,'run',side_effect=failure):
+            with self.assertRaises(backup.SyncError) as error:backup.git(Path('/repo'),'fetch','origin','main')
+        self.assertEqual(str(error.exception),'git_auth_failed')
+        self.assertEqual(error.exception.stage,'fetch');self.assertNotIn('private',str(error.exception))
+
+    def test_git_transport_failure_does_not_masquerade_as_an_authentication_problem(self):
+        failure=subprocess.CalledProcessError(128,['git'],stderr='Connection timed out: private endpoint')
+        with patch.object(backup.subprocess,'run',side_effect=failure):
+            with self.assertRaises(backup.SyncError) as error:backup.git(Path('/repo'),'push','origin','HEAD:main')
+        self.assertEqual(str(error.exception),'git_transport_failed');self.assertEqual(error.exception.stage,'push')
+
     def test_real_commit_uses_writable_repository_when_system_temp_is_read_only(self):
         repo,args,git=self.publication_repo()
         before=git('-C',repo,'rev-parse','HEAD')

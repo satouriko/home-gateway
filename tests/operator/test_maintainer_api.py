@@ -9,12 +9,33 @@ import broker
 from incidents import IncidentStore
 from policy import validate_request
 import probe_transport
+import context_cache
 
 SESSION='session-12345678-1234-1234-1234-123456789abc'
 MESSAGE='fix(workflow): 按事件处理巡检故障\n\n旧流程丢失处理进度，需要记录修复结论。\n\n运维：按证据保存结论并安排复查。\n\n验证：通过事件回归测试。'
 
 
 class MaintainerApiTests(unittest.TestCase):
+    def test_live_context_stays_identical_until_material_state_changes(self):
+        context_cache.invalidate()
+        with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)),patch.object(broker,'context_full',side_effect=[{'checked_at':1000},{'checked_at':2000}]) as full:
+            first=broker.context();second=broker.context()
+            self.assertEqual(first,second);self.assertEqual(full.call_count,1)
+            (Path(folder)/'incidents.json').write_text('{}')
+            self.assertEqual(broker.context()['checked_at'],2000)
+
+    def test_service_counters_cannot_masquerade_as_total_restart_history(self):
+        raw={'NRestarts':'0','ActiveState':'active'}
+        result=broker.service_summary(raw)
+        self.assertNotIn('NRestarts',result);self.assertEqual(result['automatic_restart_count'],0)
+        self.assertIn('manual',result['restart_counter_scope']);self.assertEqual(raw['NRestarts'],'0')
+        self.assertIsNone(broker.service_summary({'NRestarts':'unknown'})['automatic_restart_count'])
+
+    def test_field_errors_explain_static_contract_without_echoing_private_input(self):
+        with self.assertRaises(ValueError) as error:validate_request({'operation':'route_source','url':'https://example.com/','private-hint':'do not echo me'})
+        self.assertIn('accepted fields: operation, url',str(error.exception))
+        self.assertNotIn('private-hint',str(error.exception));self.assertNotIn('do not echo me',str(error.exception))
+
     def test_interleaved_publishers_keep_their_own_versions_and_messages(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(broker,'STATE',Path(folder)),patch.object(broker,'start_sync_dispatcher'),patch.object(broker,'publication_secrets',return_value=[]):
             ready=threading.Event();newer=threading.Event();errors=[]

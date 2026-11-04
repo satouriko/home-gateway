@@ -1,4 +1,9 @@
+from contextlib import contextmanager
+import http.client
+from io import BytesIO
+import socket
 import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +18,14 @@ class EvidenceTests(unittest.TestCase):
 
     def source(self,text='This service is only available in the supported countries listed here.'):
         return self.store.collect_source('https://help.example.com/regions',fetch=lambda url:text,now=1000)
+
+    @contextmanager
+    def http_source(self,body,kind='text/html',status=200):
+        wire=('HTTP/1.1 '+str(status)+' Fixture\r\nContent-Type: '+kind+'\r\nContent-Length: '+str(len(body))+'\r\n\r\n').encode()+body
+        response=http.client.HTTPResponse(SimpleNamespace(makefile=lambda *a,**k:BytesIO(wire)));response.begin()
+        with patch('route_evidence.socket.getaddrinfo',return_value=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',443))]),patch('route_evidence.http.client.HTTPSConnection') as factory:
+            factory.return_value.getresponse.return_value=response
+            yield factory.return_value
 
     def test_model_cannot_assert_source_verified_or_forge_a_quote(self):
         source=self.source()
@@ -65,6 +78,42 @@ class EvidenceTests(unittest.TestCase):
             self.store.collect_source('https://help.example.com/large'+str(i),fetch=lambda u:'x'*62000,now=1000+i)
         self.assertLessEqual(self.store.path.stat().st_size,2*1024*1024)
         self.assertLess(self.store.status(now=1100)['sources'],36)
+
+    def test_large_html_short_body_collects_real_source_and_literal_requirement(self):
+        quote='The service is available only in the listed countries and territories.'
+        html=('<html><head><title>Ignored metadata title</title><script>'+('hidden script '*7000)+'</script><style>'+('hidden style '*7000)+'</style></head>'
+            '<body><template>'+('hidden template '*5000)+'</template><svg><text>Hidden icon label</text></svg>'
+            '<main><h1>Supported regions</h1><p>'+quote+'</p></main></body></html>').encode()
+        self.assertGreater(len(html),65536)
+        with self.http_source(html) as connection:
+            source=self.store.collect_source('https://help.example.com/regions',now=1000)
+            connection.close.assert_called_once()
+        stored=self.store.get_many([source['id']],now=1001)[0]
+        self.assertEqual(stored['text'],'Supported regions '+quote)
+        requirement=self.store.record_requirement('api.example.com','proxy',[source['id']],
+            [{'source_id':source['id'],'quote':quote}],'The official listed service regions exclude the current source region.','mainland China',now=1001)
+        self.assertTrue(self.store.get_many([requirement['id']],now=1002)[0]['references_available'])
+
+    def test_raw_html_limit_rejects_even_when_discarded_scripts_leave_short_body(self):
+        body=b'<html><script>'+b'x'*(1024*1024)+b'</script><body>Short valid source text.</body></html>'
+        with self.http_source(body) as connection,self.assertRaisesRegex(ValueError,'raw'):
+            self.store.collect_source('https://help.example.com/regions',now=1000)
+        connection.close.assert_called_once();self.assertEqual(self.store.status()['sources'],0)
+
+    def test_html_body_text_limit_rejects_instead_of_silently_truncating(self):
+        # Multibyte characters enforce the persistent byte limit, not char count.
+        body=('<html><body>'+('中'*23000)+'</body></html>').encode()
+        self.assertLess(len(body),1024*1024)
+        with self.http_source(body) as connection,self.assertRaisesRegex(ValueError,'text'):
+            self.store.collect_source('https://help.example.com/regions',now=1000)
+        connection.close.assert_called_once();self.assertEqual(self.store.status()['sources'],0)
+
+    def test_plain_source_remains_bounded_and_redirect_is_not_followed(self):
+        with self.http_source(b'x'*65537,'text/plain'),self.assertRaises(ValueError):
+            fetch_public('https://help.example.com/regions')
+        with self.http_source(b'not a policy',status=302) as connection,self.assertRaisesRegex(ValueError,'HTTP 200'):
+            fetch_public('https://help.example.com/regions')
+        self.assertEqual(connection.request.call_count,1);connection.close.assert_called_once()
 
 
 if __name__=='__main__':unittest.main()

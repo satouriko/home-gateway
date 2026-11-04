@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { callBroker } from './broker-client.mjs';
+import { routingPayload } from './routing-request.mjs';
 
 const require = createRequire('/opt/dsh/package.json');
 const { defineTool } = await import(require.resolve('@deepseek-ai/dsh-tools'));
@@ -110,7 +111,7 @@ export function apply(ctx, config = {}) {
   }));
   ctx.tools.register(defineTool({
     name:'gateway_incidents',description:'接管跨会话持续存在的问题。读取证据与已有处理进度，以revision更新结论、优先级和有限复查期限。紧急程度与处理中/等待/关闭分开；只凭真实复测认定fixed，不把个别外部端点问题说成全网恢复。',
-    parameters:{operation:{type:'string',required:true,enum:['list','get','decide']},id:{type:'string',description:'list返回的case标识。'},revision:{type:'number',description:'刚读取的证据修订号，旧修订会被拒绝。'},decision:{type:'string',description:'JSON：status=open/working/verifying/blocked/closed，reason，evidence引用数组，next_review_at未来Unix秒；可选priority=urgent/normal。closed需outcome=fixed/not_a_problem/no_route_remedy/external_dependency；fixed需真实恢复证据。未解决紧急问题须15分钟内跟进，不能只为省钱降级。'}},
+    parameters:{operation:{type:'string',required:true,enum:['list','get','decide']},id:{type:'string',description:'list返回的case标识。'},revision:{type:'number',description:'刚读取的证据修订号，旧修订会被拒绝。'},decision:{type:'string',description:'JSON：status=open/working/verifying/blocked/closed，reason，evidence引用数组，next_review_at未来Unix秒；可选priority=urgent/normal。closed需outcome=fixed/not_a_problem/no_route_remedy/external_dependency；fixed需真实恢复证据。关闭未修复事件须明确priority；not_a_problem须normal。所有未恢复urgent（含closed暂无法修复）须15分钟内跟进，不能只为省钱降级。'}},
     output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},
     async execute(args,exec){
       if(args.operation==='decide'&&config.readOnly)throw Error('canary cannot change incident dispositions');
@@ -133,9 +134,7 @@ export function apply(ctx, config = {}) {
     output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},
     async execute(args,exec){
       if(config.readOnly&&!['status','get','evaluate'].includes(args.operation))throw Error('canary cannot collect or apply routing changes');
-      const payload={operation:'route_'+(args.operation==='collect'?'source':args.operation)};
-      for(const key of ['target','path','url','rationale','region_context'])if(args[key]!==undefined)payload[key]=args[key];
-      for(const key of ['source_ids','quotes','evidence_ids','business_requirement_evidence_ids','proposal'])if(args[key]!==undefined)payload[key]=JSON.parse(args[key]);
+      const payload=routingPayload(args);
       if(['requirement','apply'].includes(args.operation))payload.session_id=exec.agent.id;
       if(args.operation==='apply')payload.commit_message=publicationMessage(args);
       return JSON.stringify(await callBroker(payload,exec.signal));

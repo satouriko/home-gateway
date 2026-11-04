@@ -27,6 +27,7 @@ REPOSITORY = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 REASONS = {'program_publish', 'tool_publish', 'skill_publish', 'policy_apply',
            'audit_plan_set', 'audit_plan_enable', 'native_observe', 'workflow_publish', 'route_apply'}
 ERROR_CODES = {'push_rejected', 'sync_failed', 'unexpected_branch',
+               'git_auth_failed', 'git_dns_failed', 'git_transport_failed', 'git_push_failed', 'git_operation_failed',
                'uncommitted_repository_changes', 'diverged_history_requires_review',
                'remote_program_changes_require_deployment', 'invalid_publication_request',
                'publication_snapshot_mismatch', 'snapshot_not_verified',

@@ -228,7 +228,7 @@ def fixed_tests(source):
 
 
 def _builtin():
-    path = BUILTIN if BUILTIN.is_file() else Path(__file__).resolve().parent.parent / 'maintained/workflow.py'
+    path = BUILTIN if BUILTIN.is_file() else Path(__file__).resolve().parent.parent / 'maintained/workflow-default.py'
     source = path.read_text()
     validate_source(source)
     return {'source': source, 'version': hashlib.sha256(source.encode()).hexdigest()[:16], 'tests': [], 'published_at': None}

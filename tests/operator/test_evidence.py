@@ -73,6 +73,16 @@ def sampled_business_fixture():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_disposition_counts_do_not_claim_unverified_targets_are_restored(self):
+        records=[{'id':'fixed','status':'closed','priority':'urgent','outcome':'fixed','network_restored':True,'next_review_at':2000},
+                 {'id':'outside','status':'closed','priority':'normal','outcome':'no_route_remedy','network_restored':False,'next_review_at':2000},
+                 {'id':'active','status':'working','priority':'urgent','network_restored':False,'next_review_at':1100}]
+        from evidence import _incidents
+        result=_incidents(records,1000)
+        self.assertEqual(result['urgent_count'],1)
+        self.assertEqual(result['disposed_count'],2);self.assertEqual(result['verified_restored_count'],1)
+        self.assertEqual(result['disposed_unverified_count'],1)
+
     def test_task_keeps_controls_incident_progress_identity_without_duplicate_large_records(self):
         raw=production_sample(); before=copy.deepcopy(raw); result=task_context(raw)
         self.assertEqual(raw,before)
