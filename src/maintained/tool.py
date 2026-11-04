@@ -1,33 +1,12 @@
-"""Explain and measure endpoint reachability from the maintainer control path.
+"""Explain endpoint reachability from the control path.
 
-Why this exists: the protected business probe sometimes records
-``{"state": "probe_unavailable", "error_category": "ValueError"}`` for the very
-domains real clients keep failing on (e.g. apd-pcdnwxstat.teg.tencent-cloud.net,
-a.v.smtcdns.com).  That single token cannot tell apart three very different
-situations:
+Why a protected probe says probe_unavailable/ValueError matters: NXDOMAIN
+(name absent), EAI_AGAIN (resolver failed; existence unproven), an answer set
+over the probe cap, and an unreachable endpoint need opposite conclusions.
 
-  * the name does not resolve at all (DNS / retired endpoint),
-  * the name resolves to more than the probe transport's 16-answer cap,
-  * the name resolves and the endpoint is simply unreachable from this WAN.
-
-Without that split the same "unresolved" ticket can be re-read as "client link
-fault" or as "probe bug" for days.  This tool resolves the name, reports the
-answer set composition, states whether the protected probe would refuse it, and
-then tries a bounded TCP + TLS handshake to at most three addresses.
-
-Evidence boundaries (never collapse them):
-  * this runs on the maintainer control path (independent UID route, no Mihomo
-    data plane).  It is NOT a household client path and NOT the proxy path.
-  * a failed handshake here means "unreachable from this WAN egress", never
-    "unreachable everywhere".
-  * a successful handshake is transport evidence only: an application can still
-    reject the request (401/403/404 are business answers, not link failures).
-  * latency here is path evidence, never a bandwidth claim.
-
-The tool is read-only: no policy, rule, node, credential or engine changes.
-``run({"operation": "self_test"})`` asserts the classifiers on synthetic input.
-``run({"operation": "inspect", "domains": [...]})`` performs at most 5 domains
-and 3 addresses each, with a 2 s per-attempt budget.
+Evidence is control-path only: not a client session, not the proxy path; a
+failed handshake means unreachable from this WAN egress only; transport
+success is not application success; latency is not bandwidth.
 """
 
 import ipaddress
@@ -82,14 +61,23 @@ def _pick_addresses(addresses):
     return sorted(kept)[:MAX_ADDRESSES], sorted(set(dropped))
 
 
+def _classify_dns_error(errno):
+    """EAI_* -> evidence state; NXDOMAIN and EAI_AGAIN must never share a label."""
+    if errno == socket.EAI_NONAME:
+        return "nxdomain"
+    if errno == socket.EAI_AGAIN:
+        return "resolver_temporary"
+    return "unresolved"
+
+
 def _resolve(domain):
     """Return (addresses, detail). detail tells DNS failure apart from empty."""
     try:
         infos = socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)
     except socket.gaierror as error:
-        return [], {"dns_state": "unresolved", "dns_error": error.errno}
+        return [], {"dns_state": _classify_dns_error(error.errno), "dns_error": error.errno}
     except Exception as error:  # pragma: no cover - defensive
-        return [], {"dns_state": "unresolved", "dns_error": type(error).__name__}
+        return [], {"dns_state": "resolver_error", "dns_error": type(error).__name__}
     seen = []
     for info in infos:
         host = info[4][0]
@@ -133,7 +121,12 @@ def _summarize(resolution, picked, samples):
     as reachability; a fast connect with no handshake is named as suspected
     interception instead of a passing path.
     """
-    if resolution.get("dns_state") == "unresolved":
+    dns_state = resolution.get("dns_state")
+    if dns_state == "nxdomain":
+        return "dns_nxdomain"
+    if dns_state == "resolver_temporary":
+        return "dns_tempfail"
+    if dns_state == "unresolved":
         return "dns_unresolved"
     if resolution.get("dns_state") == "empty" or not picked:
         return "no_public_address"
@@ -183,8 +176,12 @@ def inspect_endpoint(request):
         samples = [_handshake(address, domain, 443) for address in picked]
         verdict = _summarize(resolution, picked, samples)
         refusal = _probe_refusal(resolution, len(addresses))
-        if verdict == "dns_unresolved":
-            note = "name does not resolve here; the protected probe cannot measure it either"
+        if verdict == "dns_nxdomain":
+            note = "name answers NXDOMAIN; not a resolver/proxy/node fault, though the client app may still be misconfigured"
+        elif verdict == "dns_tempfail":
+            note = "temporary resolver failure (EAI_AGAIN); existence unproven, rule out a resolver/upstream problem"
+        elif verdict == "dns_unresolved":
+            note = "name does not resolve here; the protected probe cannot measure it either; NXDOMAIN and a temporary resolver failure are not yet distinguished"
         elif verdict == "no_public_address":
             note = "no global unicast address to test; probe input would be rejected"
         elif verdict == "tls_reachable":
@@ -251,6 +248,11 @@ def self_test():
 
     check("verdict_unresolved",
           _summarize({"dns_state": "unresolved"}, [], []) == "dns_unresolved")
+    check("classify_nxdomain", _classify_dns_error(socket.EAI_NONAME) == "nxdomain")
+    check("classify_tempfail", _classify_dns_error(socket.EAI_AGAIN) == "resolver_temporary")
+    check("verdict_nxdomain", _summarize({"dns_state": "nxdomain"}, [], []) == "dns_nxdomain")
+    check("verdict_tempfail",
+          _summarize({"dns_state": "resolver_temporary"}, [], []) == "dns_tempfail")
     check("verdict_no_address",
           _summarize({"dns_state": "resolved"}, [], []) == "no_public_address")
     check("verdict_unreachable",

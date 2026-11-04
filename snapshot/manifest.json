@@ -174,7 +174,7 @@
     },
     "snapshot/published/tool-active.json": {
       "mode": 384,
-      "sha256": "bb68a6fde8f7ebda1462d0dbb9f986667862ff89282d7daeeba828650c659bc4"
+      "sha256": "6aa7ed693faba1ba15868643ed34515ede4c76489975b789fc333343eade0f9b"
     },
     "src/dsh/AGENTS.md": {
       "mode": 416,
@@ -242,7 +242,7 @@
     },
     "src/maintained/tool.py": {
       "mode": 384,
-      "sha256": "e36a9c461050d260dd8a62a4fd3dca8ec890cd3e300f6965395e4cb75d0768b8"
+      "sha256": "2a7b38d8aafff5772632ee264140c0d4b33a9a88a690ff603e412d774564d565"
     },
     "src/operator/ai_job.py": {
       "mode": 420,
