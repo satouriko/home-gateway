@@ -20,6 +20,15 @@ jobs:
       - run: python3 -m pip install -r requirements-dev.txt
       - run: sudo apt-get update
       - run: sudo apt-get install -y bubblewrap
+      - name: Prepare and verify the Ubuntu sandbox
+        run: |
+          if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+            sudo apparmor_parser -r .github/ci/bwrap.apparmor
+          fi
+          bwrap --unshare-all --die-with-parent --ro-bind /usr /usr \
+            --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+            --proc /proc --dev /dev --tmpfs /tmp -- \
+            /usr/bin/python3 -c 'print("Isolated sandbox available")'
       - run: make check
       - run: python3 backup.py --check-maintained-tests --repository .
       - run: npm ci --prefix runtime/dsh --ignore-scripts --no-audit --no-fund

@@ -1,0 +1,8 @@
+# Ubuntu 24.04 requires an application grant for unprivileged user namespaces.
+# https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/
+abi <abi/4.0>,
+include <tunables/global>
+
+profile home-gateway-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
