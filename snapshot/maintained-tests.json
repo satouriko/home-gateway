@@ -62,6 +62,10 @@
       "reason": "nonportable_test"
     },
     {
+      "name": "test_inspect_v18.py",
+      "reason": "nonportable_test"
+    },
+    {
       "name": "test_probe_cap.py",
       "reason": "nonportable_test"
     },
