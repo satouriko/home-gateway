@@ -1,6 +1,6 @@
-# 主动巡检（v15）：probe_unavailable 的 ValueError/gaierror 原因未确认时不再断言
-# “没有可用的公共解析地址”（同一错误也可能来自应答超上限或非公网地址）。
-# 保留 v14 的 recheck_nodes 去重与旧口径；只读快照，不触发测速，不改变用户分流目标。
+# 主动巡检（v16）：已知长期客户端端点的抑制不再依赖“固定检查全部正常”。
+# 修复 v15 在固定检查瞬时失败时把同一已连续多轮失败的端点再次 review_request、
+# 并写出与事实相反的“固定检查正常”。只读快照，不触发测速，不改用户分流目标。
 
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
@@ -205,13 +205,16 @@ def inspect(snapshot):
             dial_only = dial_only + [domain]
         else:
             actionable = actionable + [domain]
-            if recent_faults >= 8 and stable_fixed_paths:
+            if recent_faults >= 8:
                 probe_capped = probe_capped + [domain]
-            elif root_rejected and recent_faults >= 2 and stable_fixed_paths:
+            elif root_rejected and recent_faults >= 2:
                 app_rejected = app_rejected + [domain]
 
     if len(dial_only) > 0:
-        parts = parts + ['固定检查正常但同一客户端端点验证失败且指向端点问题，保留记录但不重复升级；未验证为用户业务恢复']
+        if stable_fixed_paths:
+            parts = parts + ['固定检查正常但同一客户端端点验证失败且指向端点问题，保留记录但不重复升级；未验证为用户业务恢复']
+        else:
+            parts = parts + ['固定检查当前异常，同一客户端端点验证也失败；不能据此区分端点问题与当前路径异常，保留记录待固定检查恢复后再判断']
     if len(unprobeable) > 0:
         parts = parts + ['客户端引用的域名受保护探测无法完成（ValueError/gaierror），原因未确认：可能是名称不存在、解析失败或应答超上限；保留记录且不重复探测，需用端点解释工具核实，这不是代理或分流故障，实际应用影响未验证']
     if len(probe_capped) > 0:
