@@ -118,6 +118,44 @@
           "patchedSha256": "69b107ca65b9042e3127c5facb8cdfe9c44b28899a11d9a3edc8800d9d782703"
         }
       ]
+    },
+    {
+      "package": "@deepseek-ai/dsh-session-projection-cache",
+      "version": "0.2.1-rc.5",
+      "file": "session-list-title.patch",
+      "sha256": "690ff13a08b5d41b87328625f1c4a6441734ddb4ff9e459bd57217912f3d7850",
+      "licenseSha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "changes": [
+        {
+          "path": "lib/index.js",
+          "upstreamSha256": "faf307dce5db2fb7ff58b4c7d9e544fc7cad5de2f270a89326a8d7bb2bda9c80",
+          "patchedSha256": "db42d7562a4ab158c4ccaa5da5d0f0d6805bbda18cc963afa3e40cc271cdf26a"
+        },
+        {
+          "path": "lib/types/index.d.ts",
+          "upstreamSha256": "d6ef17521143d13df4e45a1d02fe00c8ad01e52225e30889e2d33683fb539f2b",
+          "patchedSha256": "97a34b0133c29ed6f07ed63ef12d3d8eacc05511425205d70494b00b86ccbbb8"
+        }
+      ]
+    },
+    {
+      "package": "@deepseek-ai/dsh-api-session-controller",
+      "version": "0.2.1-rc.5",
+      "file": "session-list-title.patch",
+      "sha256": "690ff13a08b5d41b87328625f1c4a6441734ddb4ff9e459bd57217912f3d7850",
+      "licenseSha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "changes": [
+        {
+          "path": "lib/index.js",
+          "upstreamSha256": "a9801acb577b03053c5d5a3191ff555c5f1d791d0acddec113bea4511e33b386",
+          "patchedSha256": "5fcf9196c81b6326a0754c518f626200a564aa71d87e772da210624e0d673693"
+        },
+        {
+          "path": "lib/types/list.js",
+          "upstreamSha256": "a85aa9154e6bc1ec5c17ba484c0524c8ac21189cd5c6ac6dd9f0f96e2bf82891",
+          "patchedSha256": "bf1c2379b517f5cd4041d772d2396fba0011115c7a33ff6bab0146a25f29cb4d"
+        }
+      ]
     }
   ]
 }

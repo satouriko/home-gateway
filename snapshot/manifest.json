@@ -148,13 +148,17 @@
       "mode": 420,
       "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
     },
+    "runtime/dsh/patches/LICENSE.session-title": {
+      "mode": 420,
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    },
     "runtime/dsh/patches/NOTICE.md": {
       "mode": 420,
-      "sha256": "3a4a11d96487d92d640e41f016180f3647f353bff37890c10b5da0e727f7e99d"
+      "sha256": "5eb9463239985ae43521cfbf14b642e32de24cbf2fa708616a1d63d895c87b22"
     },
     "runtime/dsh/patches/manifest.json": {
       "mode": 420,
-      "sha256": "075708e4584f7e4935311c5d4559fb6a73088f8a99b666928b993f1ce24a8716"
+      "sha256": "f891c3942921d48a45fb6de2b51ca5c272de0c1b8d016527c795a3354d7afe2d"
     },
     "runtime/dsh/patches/schedule-execution.patch": {
       "mode": 420,
@@ -167,6 +171,14 @@
     "runtime/dsh/patches/schedule-provenance.json": {
       "mode": 420,
       "sha256": "eb02d3fd764dd40bb28b9d50eb7aff6deecb5af1362f10a132b0e7e67e28065e"
+    },
+    "runtime/dsh/patches/session-list-title.patch": {
+      "mode": 420,
+      "sha256": "690ff13a08b5d41b87328625f1c4a6441734ddb4ff9e459bd57217912f3d7850"
+    },
+    "runtime/dsh/patches/title-provenance.json": {
+      "mode": 420,
+      "sha256": "5376e2d418909c48709a0f964265bf203250b976d0d581c886a4644900a26ae3"
     },
     "snapshot/maintained-tests.json": {
       "mode": 384,

@@ -1,0 +1,146 @@
+diff --git a/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js b/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
+@@ -1976,7 +1976,7 @@
+ 		}
+ 		for (const record of cold) {
+ 			signal?.throwIfAborted();
+-			items.push(this.summarizeCold(record));
++			items.push(await this.summarizeCold(record, signal));
+ 			if (performance.now() >= yieldDeadline) {
+ 				await scheduler.yield();
+ 				signal?.throwIfAborted();
+@@ -1987,8 +1987,18 @@
+ 		items.sort((left, right) => right.updatedAt - left.updatedAt);
+ 		return items;
+ 	}
+-	summarizeCold({ header, formatStatus }) {
+-		const projections = this.projectionsFor(header, void 0);
++	async summarizeCold({ header, formatStatus }, signal) {
++		let projections = this.projectionsFor(header, void 0);
++		const cache = this.ctx.get("sessionProjectionCache");
++		const fresh = await cache?.freshTitleHint?.(header, signal);
++		signal?.throwIfAborted();
++		const attached = this.ctx.sessions.get(header.id);
++		if (attached !== void 0) return this.summaryFor(attached);
++		if (fresh !== void 0) projections = {
++			kind: "cached",
++			asOfSeq: Math.min(projections?.asOfSeq ?? fresh.asOfSeq, fresh.asOfSeq),
++			values: { ...projections?.values, ...fresh.values }
++		};
+ 		const metadata = projections?.values.sessionListMetadata;
+ 		return {
+ 			sessionId: header.id,
+diff --git a/node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/list.js b/node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/list.js
+--- a/node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/list.js
++++ b/node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/list.js
+@@ -133,7 +133,7 @@
+         }
+         for (const record of cold) {
+             signal?.throwIfAborted();
+-            items.push(this.summarizeCold(record));
++            items.push(await this.summarizeCold(record, signal));
+             if (performance.now() >= yieldDeadline) {
+                 await scheduler.yield();
+                 signal?.throwIfAborted();
+@@ -144,8 +144,18 @@
+         items.sort((left, right) => right.updatedAt - left.updatedAt);
+         return items;
+     }
+-    summarizeCold({ header, formatStatus }) {
+-        const projections = this.projectionsFor(header, undefined);
++    async summarizeCold({ header, formatStatus }, signal) {
++        let projections = this.projectionsFor(header, undefined);
++        const cache = this.ctx.get('sessionProjectionCache');
++        const fresh = await cache?.freshTitleHint?.(header, signal);
++        signal?.throwIfAborted();
++        const attached = this.ctx.sessions.get(header.id);
++        if (attached !== undefined) return this.summaryFor(attached);
++        if (fresh !== undefined) projections = {
++            kind: 'cached',
++            asOfSeq: Math.min(projections?.asOfSeq ?? fresh.asOfSeq, fresh.asOfSeq),
++            values: { ...projections?.values, ...fresh.values }
++        };
+         const metadata = projections?.values.sessionListMetadata;
+         return {
+             sessionId: header.id,
+diff --git a/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/index.js b/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/index.js
+@@ -1,3 +1,6 @@
++import { open as openTitleHint } from "node:fs/promises";
++import { constants as titleHintFlags } from "node:fs";
++import { join as titleHintPath } from "node:path";
+ import { Service } from "@deepseek-ai/cordis";
+ import z from "@deepseek-ai/schemastery";
+ import { isJsonValue, snapshotJsonValue } from "@deepseek-ai/dsh-util-values";
+@@ -195,6 +198,57 @@
+ 		if (record === void 0 || !currentLifecycleMatches(record.identity, expected)) return void 0;
+ 		return this.viewRecord(record, keys);
+ 	}
++	/**
++	* Read one external JSON checkpoint's title without hydrating or rewriting
++	* any Session/cache row. Domain tables are process-local snapshots; external
++	* workers can publish newer per-record files after this Host opened its Map.
++	* This pinned JSON adapter uses its configured route/root, never DSH_HOME or
++	* the process cwd. Other backends retain their existing cached-list behavior.
++	*/
++	async freshTitleHint(meta, signal) {
++		signal?.throwIfAborted();
++		let handle;
++		try {
++			const domain = this.ctx.storageDomain;
++			const backendName = domain.config.routes?.session_projcache ?? domain.config.backend;
++			if (backendName !== "json" || !/^[a-zA-Z0-9_-]{1,200}$/.test(meta.id)) return;
++			const backend = this.ctx.get("storage")?.backend.get(backendName);
++			if (typeof backend?.root !== "string") return;
++			handle = await openTitleHint(titleHintPath(backend.root, "session_projcache", "sessions", meta.id + ".json"), titleHintFlags.O_RDONLY | titleHintFlags.O_NOFOLLOW);
++			signal?.throwIfAborted();
++			const identity = await handle.stat();
++			if (!identity.isFile() || identity.size < 1 || identity.size > 256 * 1024) return;
++			const buffer = Buffer.alloc(identity.size + 1);
++			let length = 0;
++			while (length < buffer.length) {
++				signal?.throwIfAborted();
++				const read = await handle.read(buffer, length, buffer.length - length, null);
++				if (read.bytesRead === 0) break;
++				length += read.bytesRead;
++			}
++			signal?.throwIfAborted();
++			if (length !== identity.size) return;
++			const envelope = JSON.parse(buffer.toString("utf8", 0, length));
++			if (![projectionCacheDomainSpec.version, ...projectionCacheDomainSpec.compatibleVersions].includes(envelope.version)) return;
++			const parsed = checkpointRecord.safeParse(envelope.record);
++			if (!parsed.success || !currentLifecycleMatches(parsed.data.identity, lifecycleIdentityOf(meta))) return;
++			const candidate = parsed.data;
++			const hint = this.viewRecord(candidate, [PREDECESSOR_TITLE_KEY]);
++			if (hint === void 0) return;
++			const current = this.requireTable().get(meta.id);
++			if (current !== void 0 && currentLifecycleMatches(current.identity, lifecycleIdentityOf(meta))) {
++				const previous = this.viewRecord(current, [PREDECESSOR_TITLE_KEY]);
++				if (previous !== void 0 && current.rows.title.seq >= candidate.rows.title.seq) return previous;
++			}
++			return hint;
++		} catch {
++			signal?.throwIfAborted();
++			return;
++		} finally {
++			if (handle !== void 0) await handle.close().catch(() => {});
++		}
++	}
++
+ 	/**
+ 	* Read only a predecessor checkpoint's title as a zero-I/O listing hint.
+ 	*
+diff --git a/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/types/index.d.ts b/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/types/index.d.ts
+--- a/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/types/index.d.ts
++++ b/node_modules/@deepseek-ai/dsh-session-projection-cache/lib/types/index.d.ts
+@@ -92,6 +92,8 @@
+      *   this lifecycle at the current Session format.
+      */
+     cachedSnapshot(meta: SessionHeader, keys?: readonly Extract<keyof SessionProjectionMap, string>[]): ProjectionSnapshot | undefined;
++    /** Read a bounded current-lifecycle external JSON title hint without rewriting any cache row. */
++    freshTitleHint(meta: SessionHeader, signal?: AbortSignal): Promise<ProjectionSnapshot | undefined>;
+     /**
+      * Read only a predecessor checkpoint's title as a zero-I/O listing hint.
+      *
