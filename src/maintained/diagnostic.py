@@ -1,8 +1,9 @@
-# 主动巡检（v19）。只读快照，不改用户分流目标。
-# 修复 v18 的漏报复核：v18 在没有观测历史、快照也未提供观测时间的残缺输入下，
-# 也把未探测的客户端问题当成“陈旧记录”延后，会掩盖新的客户端失败（固定回归
-# recurring_client_failure 失败）。v19 只在观测管线确实已运行（history 或
-# business checked_at 存在）且近期无该域名失败时，才延后无探测记录的旧问题。
+# 主动巡检（v20）。只读快照，不改用户分流目标。
+# 修复 v19：真实快照里已处置端点通常还有一条“无路径结果”的探测记录
+# （endpoint_unknown/unsupported_protocol），v19 只在完全没有探测记录时才延后，
+# 因此仍会每轮对 amp-api-edge 生成 review_request。v20 改为：观测管线已运行、
+# 近期失败流无该域名、且没有可用路径对照（无探测记录或只有未知/不支持状态）时，
+# 保留记录并延后复核；有路径对照或近期失败时仍复核，防止漏报。
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
     status = snapshot.get('status', {})
@@ -184,7 +185,7 @@ def inspect(snapshot):
             unprobeable = unprobeable + [domain]
         elif dual_fail:
             dial_only = dial_only + [domain]
-        elif (not business_checks.get(domain) and recent_faults == 0
+        elif (recent_faults == 0 and not paths
               and (history or business.get('checked_at'))):
             deferred = deferred + [domain]
         else:
@@ -205,7 +206,7 @@ def inspect(snapshot):
     if app_rejected:
         parts += ['端点根路径 HTTP 4xx（应用层拒绝）且直连/代理传输均可达，停止重复探测与复核；不证明应用层可用']
     if deferred:
-        parts += ['%d个已知端点无探测记录且近期无失败证据，保留记录不重复复核；不表示用户业务已恢复' % len(deferred)]
+        parts += ['%d个已知端点近期无失败证据且无可用路径对照，保留记录不重复复核；不表示用户业务已恢复' % len(deferred)]
     newest_business_ts = 0
     for entry in business_checks.values():
         res = entry.get('result', {})
