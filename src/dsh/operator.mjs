@@ -123,7 +123,7 @@ export function apply(ctx, config = {}) {
   }));
   ctx.tools.register(defineTool({
     name:'gateway_evidence',description:'按需读取完整证据。起始摘要同时包含正常对照、失败和覆盖缺口；细节有snapshot_ref，变更后重新核对，不能把不同版本无提示混用。',
-    parameters:{section:{type:'string',required:true,enum:['diagnosis','checks','observations','business_observations','incidents','history','node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow']},target:{type:'string',description:'可选具体域名、case标识或字段，只取相关对象。'},limit:{type:'number',description:'最多32项，默认16。'},snapshot_ref:{type:'string',description:'摘要里的快照引用；返回requested_snapshot_matches明确是否已变化。'}},
+    parameters:{section:{type:'string',required:true,enum:['diagnosis','checks','observations','business_observations','incidents','history','node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow','operation_history']},target:{type:'string',description:'可选具体域名、case标识或字段，只取相关对象。'},limit:{type:'number',description:'最多32项，默认16。'},snapshot_ref:{type:'string',description:'摘要里的快照引用；返回requested_snapshot_matches明确是否已变化。'}},
     output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},
     async execute(args,exec){return JSON.stringify(await callBroker({operation:'evidence_detail',...args},exec.signal));},
     presentCall(){return {card:'generic',title:'读取相关完整证据',kind:'read'};},
@@ -152,6 +152,7 @@ export function apply(ctx, config = {}) {
     async execute(args, exec) {
       if (config.readOnly && !['status','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','context'].includes(args.operation)) throw new Error('canary permits read-only observations only');
       const request = { operation: args.operation };
+      if(['recheck_nodes','refresh_subscription','restart_gateway','restore_gateway'].includes(args.operation))request.session_id=exec.agent.id;
       if (args.target !== undefined) request.target = args.target;
       if(args.endpoint!==undefined)request.endpoint=JSON.parse(args.endpoint);
       if(args.refresh!==undefined)request.refresh=args.refresh;
@@ -161,7 +162,7 @@ export function apply(ctx, config = {}) {
   }));
   for (const [name, prefix, description] of [
     ['gateway_skill', 'skill_', '维护自己的运维方法skill：读取版本、测试候选、验证发布。候选Markdown在工作区编辑，通过行为验收后版本化上线。'],
-    ['gateway_program', 'program_', '维护主动巡检分析程序。Python函数inspect(snapshot)输出summary/action/probe_domains；固定测试通过后版本化发布。'],
+    ['gateway_program', 'program_', '维护主动巡检分析程序。Python函数inspect(snapshot)输出summary/action/probe_domains；固定场景和当前真实快照验收后发布；issues中的incident提供当前复查期限与新证据，遵守requires_attention；必须确认live_validation重现并解决原症状。'],
     ['gateway_workflow', 'workflow_', '维护实际决定事件关注、复查、定向探测与分流调查的运维策略inspect(snapshot)。读取当前源码/契约，复现问题、测试、发布；硬故障保护独立，运行失败自动回退。不是只写分析建议。'],
     ['gateway_tools', 'tool_', '维护和执行自己的运维工具代码。Python模块run(request)支持self_test和inspect；在独立低权限身份、只读系统和资源限额下测试、发布、运行，失败自动回到前版。'],
   ]) {

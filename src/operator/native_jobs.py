@@ -138,7 +138,10 @@ def admission_reason(state,ledger,effective,now,occurrence):
 def retry_candidate(state,ledger,now):
     """Read-only eligibility; the executor rechecks the same gate under its lease."""
     gate=ledger.get('last_gate',{})
-    if gate.get('admitted') or gate.get('reason')!='no due audit or new improvement evidence':return None
+    retryable={'no due audit or new improvement evidence','waiting for off-peak budget',
+               'waiting for fresh program observations','minimum audit spacing',
+               'storage reserve is protected','emergency recovery takes priority','audit already running'}
+    if gate.get('admitted') or gate.get('reason') not in retryable:return None
     task=ledger.get('observed_task') or {};receipt=task.get('lastDelivery') or {}
     if task.get('id')!=ledger.get('schedule_id') or task.get('status')!='active':return None
     if receipt.get('kind')!='execution' or receipt.get('status')!='skipped' or receipt.get('retry'):return None

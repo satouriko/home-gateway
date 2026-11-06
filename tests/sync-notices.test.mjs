@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deliverSyncNotice, formatSyncNotice, installSyncNotices } from '../src/dsh/sync-notices.mjs';
+import { deliverSyncNotice, deliverOperationNotice, formatSyncNotice, installSyncNotices } from '../src/dsh/sync-notices.mjs';
 
 const sid='session-12345678-1234-4234-8234-123456789abc';
 const receipt=(extra={})=>({id:'a'.repeat(32),revision:2,notice_id:'gateway-source-sync-'+ 'a'.repeat(32)+'-2',session_id:sid,
@@ -158,9 +158,14 @@ test('installed native JSONL backend persists notice and releases writer across 
     await first.fiber.dispose();
     second=await start();
     assert.equal(await deliverSyncNotice(boundary(second),receipt(),ack),true);
+    const operation={session_id:sid,revision:7,notice_id:'gateway-operations-'+sid.slice(8).replaceAll('-','')+'-7',
+      records:[{operation:'recheck_nodes',status:'pending_rollback'},{operation:'restore_gateway',status:'rolled_back',gateway_restarted:true}]};
+    assert.equal(await deliverOperationNotice(boundary(second),operation,ack),true);
+    assert.equal(await deliverOperationNotice(boundary(second),operation,ack),true);
     const reader=await second.sessionPersistence.open(sid,'read');
     const {events}=await reader.read();await reader.close();
-    assert.equal(events.length,1);assert.equal(events[0].data.id,receipt().notice_id);
-    assert.equal(events[0].data.source.form,'notice');assert.equal(acks,2);
+    assert.equal(events.length,2);assert.equal(events[0].data.id,receipt().notice_id);
+    assert.equal(events[0].data.source.form,'notice');assert.equal(acks,4);
+    assert.equal(events[1].data.source.kind,'home-gateway-operation-audit');
   } finally {await second?.fiber.dispose();await first.fiber.dispose();}
 });

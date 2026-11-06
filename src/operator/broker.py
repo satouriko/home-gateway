@@ -277,6 +277,11 @@ def context_full():
     result['node_health']=node_observations(result.get('policy',{}))
     from runtime_facts import collect
     result['runtime_facts']=collect()
+    try:
+        from operation_history import OperationHistory
+        records=OperationHistory(STATE/'operation-history.json').read()
+        result['operation_history']={'available':True,'records':records['records'],'discarded_records':records['discarded_records']}
+    except (OSError,ValueError):result['operation_history']={'available':False,'evidence_gap':'operation history unavailable'}
     from incidents import IncidentStore
     try:result['incidents']=IncidentStore(STATE/'incidents.json').list()
     except ValueError:result['incidents']={'available':False,'maintenance_fault':'incident storage requires recovery'}
@@ -311,7 +316,7 @@ def context():
     # decisions, versions and patrol findings invalidate without waiting.
     watched=[STATE/name for name in ['patrol.json','incidents.json','approved-policy.json','workflow-state.json',
         'diagnostic-active.json','tool-active.json','audit-plan.json','publication-receipts.json',
-        'source-sync-request.json','route-evidence.json','pending.json','last-repair.json','last-recovery.json']]
+        'source-sync-request.json','route-evidence.json','pending.json','last-repair.json','last-recovery.json','operation-history.json']]
     watched.extend([CONFIG,SYNC_STATUS,SYNC_HOLD,Path('/run/net-gateway-agent/patrol-context.json'),
                     Path('/etc/net-gateway-agent/pricing.json'),Path('/usr/local/share/net-gateway-agent/skill/SKILL.md')])
     return context_cache.get(_context_snapshot,watched)
@@ -457,7 +462,8 @@ def repair(operation):
         if pending.exists() and operation!='restore_gateway':
             raise ValueError('a previous repair is pending protected rollback; inspect status')
         ident=uuid.uuid4().hex;deadline=time.time()+90
-        write_state(pending,{'id':ident,'operation':operation,'deadline':deadline,'boot_id':boot_id()})
+        write_state(pending,{'id':ident,'operation':operation,'deadline':deadline,'boot_id':boot_id(),
+            'operation_record_id':getattr(REQUEST,'operation_record_id',None),'session_id':getattr(REQUEST,'origin_session_id',None)})
         if operation=='restore_gateway':restore_gateway()
         elif operation=='restart_gateway':
             validate_baseline(json.loads(CONFIG.read_text()),pwd.getpwnam('dsh').pw_uid,current_policy())
@@ -513,6 +519,10 @@ def dispatch(request):
                 return result
         return comparison
     data=validate_request(request);op=data['operation']
+    if op in ['operation_notices','operation_notice_ack']:
+        from operation_history import OperationHistory
+        store=OperationHistory(STATE/'operation-history.json')
+        return store.notices() if op=='operation_notices' else store.acknowledge(data['session_id'],data['revision'],data['message_id'])
     if op.startswith('route_'):
         from routing_control import operation
         return operation(data,sys.modules[__name__])
@@ -587,7 +597,13 @@ def dispatch(request):
     if op.startswith('program_'):
         from programs import program_action
         if not PROGRAM_LOCK.acquire(blocking=False):raise ValueError('another diagnostic program test is running')
-        try:return program_action(op,data.get('source'))
+        try:
+            snapshot=None
+            if op!='program_status':
+                from diagnostic_input import live
+                snapshot=live(STATE)
+                if snapshot.get('incident_view',{}).get('available') is not True:raise ValueError('current incident decisions required before diagnostic publication')
+            return program_action(op,data.get('source'),snapshot=snapshot)
         finally:PROGRAM_LOCK.release()
     if op.startswith('tool_'):
         from extensions import action
@@ -627,8 +643,32 @@ def handle(request):
     return result
 
 def envelope(request):
-    try:return {'ok':True,'result':handle(request)}
-    except Exception as error:return {'ok':False,'error':type(error).__name__,'message':str(error) if isinstance(error,ValueError) else 'operation failed; check local recovery status'}
+    from operation_history import OperationHistory,valid_session
+    store=OperationHistory(STATE/'operation-history.json');record=None
+    op=request.get('operation') if isinstance(request,dict) else None
+    if op in REPAIRS:
+        sid=request.get('session_id');sid=sid if valid_session(sid) else None
+        try:record=store.begin(op,sid)
+        except (ValueError,OSError):pass
+    REQUEST.operation_record_id=record['id'] if record else None
+    REQUEST.origin_session_id=record.get('session_id') if record else None
+    def finish(result=None,error=None):
+        if not record:return
+        token=None
+        try:
+            pending=json.loads((STATE/'pending.json').read_text())
+            if pending.get('operation_record_id')==record['id']:token=pending.get('id')
+        except (OSError,ValueError):pass
+        try:store.finish(record['id'],result,error,token)
+        except (ValueError,OSError):pass
+        context_cache.invalidate()
+    try:
+        result=handle(request);finish(result=result)
+        return {'ok':True,'result':result}
+    except Exception as error:
+        finish(error=error)
+        return {'ok':False,'error':type(error).__name__,'message':str(error) if isinstance(error,ValueError) else 'operation failed; check local recovery status'}
+    finally:REQUEST.operation_record_id=None;REQUEST.origin_session_id=None
 
 class UnixHandler(socketserver.StreamRequestHandler):
     def handle(self):
@@ -724,8 +764,13 @@ def watchdog():
             transaction=acquire_transaction()
         try:
             if pending.exists() and recovery_due(json.loads(pending.read_text()),time.time(),boot_id()):
+                recovery=json.loads(pending.read_text())
                 restore_gateway();pending.unlink(missing_ok=True)
                 write_state(STATE/'last-recovery.json',{'at':time.time(),'reason':'uncommitted repair deadline or reboot'})
+                try:
+                    from operation_history import OperationHistory
+                    OperationHistory(STATE/'operation-history.json').recovery(recovery)
+                except (OSError,ValueError):pass
         finally:release_transaction(transaction)
     try:guard_login()
     except Exception as error:

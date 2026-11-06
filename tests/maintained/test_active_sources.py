@@ -63,6 +63,31 @@ class ActiveDiagnosticTests(unittest.TestCase):
             'checks': {domain: {'result': {'state': 'probe_unavailable', 'error_category': 'ValueError'}}}}
         self.assertNotIn('没有可用的公共解析地址', self.result()['summary'])
 
+    def test_current_disposition_with_unknown_paths_waits_until_its_review(self):
+        domain='deferred.example.com'
+        self.snapshot['business_observations']={'issues':[{'domain':domain,'fingerprint':'deferred','resolved':False,
+            'incident':{'requires_attention':False,'status':'closed','priority':'normal','next_review_at':2000}}],
+            'checks':{domain:{'result':{'paths':{'direct':{'transport_ok':None},'proxy':{'transport_ok':None}}}}}}
+        result=self.result()
+        self.assertNotIn(domain,result['probe_domains']);self.assertFalse(result.get('review_request'))
+
+    def test_new_evidence_remains_actionable_beside_an_older_disposition(self):
+        self.snapshot['business_observations']={'issues':[
+            {'domain':'deferred.example.com','fingerprint':'old','resolved':False,'incident':{'requires_attention':False}},
+            {'domain':'fresh.example.com','fingerprint':'fresh','resolved':False,'incident':{'requires_attention':True,'new_evidence':True}}],
+            'checks':{}}
+        result=self.result()
+        self.assertIn('fresh.example.com',result['probe_domains']);self.assertNotIn('deferred.example.com',result['probe_domains'])
+        self.assertEqual(result['review_request']['fingerprint'],'fresh')
+
+    def test_held_prefix_does_not_consume_the_three_target_budget(self):
+        held=[{'domain':'held'+str(i)+'.example.com','fingerprint':'held-'+str(i),'resolved':False,
+               'incident':{'requires_attention':False}} for i in range(3)]
+        for fresh in [True,False]:
+            self.snapshot['business_observations']={'issues':held+[{'domain':'later.example.com','fingerprint':'later','resolved':False,
+                'incident':{'requires_attention':True,'new_evidence':fresh}}],'checks':{}}
+            with self.subTest(new_evidence=fresh):self.assertIn('later.example.com',self.result()['probe_domains'])
+
 
 class ActiveWorkflowTests(unittest.TestCase):
     def setUp(self):

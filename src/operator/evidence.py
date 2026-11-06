@@ -10,7 +10,7 @@ import json
 
 SCHEMA_VERSION=1
 _SECTIONS={'diagnosis','checks','observations','business_observations','incidents','history',
-           'node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow'}
+           'node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow','operation_history'}
 _CODE_KEYS={'code','source_code','program_source','content','native_task_prompt','last_diagnosis'}
 
 
@@ -325,6 +325,10 @@ def system_context(full):
     if 'source_control' in full:
         result['source_control']=_source_control_summary(full['source_control'])
         result['source_control_detail_ref']=_ref(full['source_control'],'source_control')
+    if 'operation_history' in full:
+        history=_dict(full['operation_history']);rows=_list(history.get('records'))
+        result['operation_history']={'available':history.get('available'), 'records':rows[-6:],
+            'more_count':max(0,len(rows)-6),'discarded_records':history.get('discarded_records',0),'detail_ref':_ref(history,'operation_history')}
     task=_dict(full.get('native_automation')).get('task')
     for key in ['native_schedule','schedule']:
         if task is not None and _dict(full.get('audit_plan')).get(key)==task:
@@ -360,13 +364,14 @@ def detail(state,section,target=None,limit=16):
         rows=_observation_rows(value)
     elif section=='incidents':
         rows=_list(value) if isinstance(value,list) else _list(_dict(value).get('cases'))+_list(_dict(value).get('overflow_cases'))
+    elif section=='operation_history':rows=_list(_dict(value).get('records'))
     elif isinstance(value,list):rows=value
     elif section=='checks':rows=[{'name':k,**v} if isinstance(v,dict) else {'name':k,'value':v} for k,v in _dict(value).items()]
     else:rows=[value] if value else []
     if section=='maintenance' and target in _dict(value):
         rows=[{'name':target,'value':value[target]}]
     elif target is not None:
-        rows=[r for r in rows if isinstance(r,dict) and target in [r.get('domain'),r.get('id'),r.get('name')]]
+        rows=[r for r in rows if isinstance(r,dict) and target in [r.get('domain'),r.get('id'),r.get('name'),r.get('session_id') if section=='operation_history' else None]]
     result={'schema_version':SCHEMA_VERSION,'section':section,'target':target,'snapshot_ref':_hash(value),
             'observed_at':_at(value),'status':'available' if value else 'unknown','items':copy.deepcopy(rows[:limit]),
             'total_count':len(rows),'more_count':max(0,len(rows)-limit),

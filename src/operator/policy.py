@@ -4,10 +4,12 @@ import re
 import json
 
 READS = {'status','diagnose','probe','probe_compare','traffic_status','quality','patrol_status','policy','context','audit_plan','native_status','native_inspection','overview','source_sync_notices','incidents','incident_get','evidence_detail'}
+READS.add('operation_notices')
 REPAIRS = {'recheck_nodes', 'refresh_subscription', 'restart_gateway', 'restore_gateway'}
 PROGRAMS = {'program_status','program_test','program_publish','tool_status','tool_test','tool_publish','tool_run','skill_status','skill_test','skill_publish','workflow_status','workflow_test','workflow_publish'}
 POLICY = {'policy_test','policy_apply'}
 AUX={'maintenance_register','audit_plan_set','native_bind','native_admit','native_check','native_finish','native_observe','audit_plan_enable','source_sync_notice_ack','incident_decide'}
+AUX.add('operation_notice_ack')
 PUBLISHES={'program_publish','tool_publish','skill_publish','workflow_publish','policy_apply','audit_plan_set','audit_plan_enable'}
 SOURCE_OPERATIONS={'program_test','program_publish','tool_test','tool_publish','skill_test','skill_publish','workflow_test','workflow_publish'}
 ROUTING={'route_status','route_get','route_source','route_requirement','route_evaluate','route_apply'}
@@ -29,6 +31,7 @@ def validate_request(request):
     if operation=='route_evaluate':allowed={'operation','target','path','evidence_ids','business_requirement_evidence_ids'}
     if operation=='route_apply':allowed={'operation','proposal'}
     if operation=='source_sync_notice_ack':allowed={'operation','request_id','revision','session_id','message_id'}
+    if operation=='operation_notice_ack':allowed={'operation','revision','session_id','message_id'}
     if operation=='maintenance_register':allowed={'operation','session_id','kind'}
     if operation=='audit_plan_set':allowed={'operation','interval_hours','daily_budget','reason'}
     if operation=='audit_plan_enable':allowed={'operation','receipt'}
@@ -41,9 +44,15 @@ def validate_request(request):
         if operation=='native_observe':allowed={'operation','task'}
     if operation in ['skill_test','skill_publish']:allowed.update(['deadline','maintenance_session'])
     if operation in PUBLISHES:allowed.update(['session_id','commit_message'])
+    if operation in REPAIRS:allowed.add('session_id')
     if set(request) - allowed:
         raise ValueError('unexpected fields for '+operation+'; accepted fields: '+', '.join(sorted(allowed)))
     result = {'operation': operation}
+    if operation=='operation_notice_ack':
+        from operation_history import valid_session,notice_id
+        sid=request.get('session_id');revision=request.get('revision')
+        if not valid_session(sid) or type(revision) is not int or not 0<revision<2**53 or request.get('message_id')!=notice_id(sid,revision):raise ValueError('valid operation receipt identity required')
+        return {key:request[key] for key in allowed}
     if operation=='source_sync_notice_ack':
         from source_sync import valid_session
         if not valid_session(request.get('session_id')) or not re.fullmatch(r'[a-f0-9]{32}',str(request.get('request_id',''))) or type(request.get('revision')) is not int or request['revision']<1:
@@ -54,7 +63,7 @@ def validate_request(request):
     if operation in PUBLISHES and 'commit_message' in request:
         from commit_messages import validate_commit_message
         result['commit_message']=validate_commit_message(request['commit_message'])
-    if operation in PUBLISHES|{'incident_decide','route_requirement'} and request.get('session_id'):
+    if operation in PUBLISHES|REPAIRS|{'incident_decide','route_requirement'} and request.get('session_id'):
         from source_sync import valid_session
         if not valid_session(request['session_id']):raise ValueError('valid originating session required')
         result['session_id']=request['session_id']
@@ -82,7 +91,7 @@ def validate_request(request):
         if operation=='route_status' and result.get('target') is not None and (not isinstance(result['target'],str) or not re.fullmatch(r'(?:[a-z0-9-]+\.)+[a-z]{2,63}',result['target'])):raise ValueError('exact public domain required')
         if operation=='route_apply' and (not isinstance(result.get('proposal'),dict) or len(json.dumps(result['proposal']))>4096):raise ValueError('bounded proposal required')
     if operation=='evidence_detail':
-        sections={'diagnosis','checks','observations','business_observations','incidents','history','node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow'}
+        sections={'diagnosis','checks','observations','business_observations','incidents','history','node_health','runtime_facts','recent_system_changes','source_control','maintenance','operational_workflow','operation_history'}
         if request.get('section') not in sections or type(request.get('limit',16)) is not int or not 1<=request.get('limit',16)<=32:raise ValueError('bounded known evidence section required')
         target=request.get('target')
         if target is not None and (not isinstance(target,str) or not 1<=len(target)<=253 or not re.fullmatch(r'[a-zA-Z0-9_.:-]+',target)):raise ValueError('valid evidence target required')

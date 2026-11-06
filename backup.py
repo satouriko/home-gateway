@@ -25,7 +25,7 @@ from bounded import run as bounded_run
 CODE = ('user_policy.py patrol.py bounded.py policy.py extensions.py programs.py broker.py '
         'storage.py control_route.py ai_job.py credential_guard.mjs pricing.py skills.py native_jobs.py overview.py traffic.py traffic_collector.py business_probe.py business_watch.py probe_transport.py source_sync.py sandbox_runner.py node_health.py '
         'commit_messages.py maintenance.py incidents.py workflow.py evidence.py runtime_facts.py '
-        'adaptive_routing.py route_evidence.py route_transaction.py routing_control.py run_metrics.py context_cache.py').split()
+        'adaptive_routing.py route_evidence.py route_transaction.py routing_control.py run_metrics.py context_cache.py diagnostic_input.py operation_history.py').split()
 DOCS = ['CONTRACTS.md', 'identity.txt', 'operator.mjs', 'native-maintenance.mjs', 'broker-client.mjs', 'maintenance-prompt.txt', 'BACKGROUND.md', 'skill/SKILL.md',
         'sync-notices.mjs', 'routing-request.mjs', 'network-overview/package.json', 'network-overview/index.mjs', 'network-overview/client.js']
 UNITS = ('net-gateway-control-route.service net-gateway-agent.service net-gateway-ai-patrol.service '

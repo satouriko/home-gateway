@@ -157,6 +157,24 @@ class NativeTests(unittest.TestCase):
             'execution_id':'skipped-id','occurrence_at':occurrence})
         self.assertEqual(self.path.read_bytes(),before)
 
+    def test_peak_deferred_receipt_retries_in_valley_once_with_original_occurrence(self):
+        occurrence=self.retry_fixture()
+        self.ledger['last_gate']['reason']='waiting for off-peak budget';self.write()
+        with patch.object(native,'routine_allowed',return_value=False):
+            self.assertIsNone(native.retry_candidate(self.state,self.ledger,self.now))
+        retry=native.retry_candidate(self.state,self.ledger,self.now)
+        self.assertIsNotNone(retry);self.assertEqual(retry['occurrence_at'],occurrence)
+        lease=native.admit('session-test',self.state,self.now,occurrence='schedule-test:'+occurrence,execution_id='skipped-id')
+        self.assertTrue(lease['admitted']);self.assertEqual(lease['id'],'skipped-id')
+        self.assertIsNone(native.retry_candidate(self.state,native.read(),self.now))
+
+    def test_peak_catchup_never_overrides_deleted_task_emergency_or_budget(self):
+        self.retry_fixture();self.ledger['last_gate']['reason']='waiting for off-peak budget'
+        for changed in [{'enabled':False},{'runs':[{'id':str(i),'at':self.now-15000-i,'deadline':self.now-14000,'state':'completed','kind':'independent_audit','program_version':'v1'} for i in range(6)]}]:
+            self.assertIsNone(native.retry_candidate(self.state,{**self.ledger,**changed},self.now))
+        with patch.object(native,'emergency_active',return_value=True):
+            self.assertIsNone(native.retry_candidate(self.state,self.ledger,self.now))
+
     def test_retry_candidate_respects_due_budget_spacing_freshness_and_future_occurrences(self):
         self.retry_fixture()
         cases=[('checked_at',self.now-901),('last_routine_ai_at',self.now-7199),

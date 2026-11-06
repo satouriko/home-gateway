@@ -40,13 +40,44 @@ function messageFor(receipt) {
     source:{kind:'home-gateway-source-sync',form:'notice',summary:notice.summary}};
 }
 
-function alreadyPresent(events,id) {
-  return events.some(event=>event.type==='user/message'&&event.data?.id===id&&event.data.source?.kind==='home-gateway-source-sync');
+function alreadyPresent(events,id,kind) {
+  return events.some(event=>event.type==='user/message'&&event.data?.id===id&&event.data.source?.kind===kind);
 }
 
 /** One native context notice, never an Inbox delivery or a fabricated model response. */
 export async function deliverSyncNotice(ctx,receipt,callBroker=brokerCall,options={}) {
   if(!validReceipt(receipt))return false;
+  return deliverNotice(ctx,receipt,messageFor(receipt),{operation:'source_sync_notice_ack',request_id:receipt.id,revision:receipt.revision,
+    session_id:receipt.session_id,message_id:receipt.notice_id},callBroker,options);
+}
+
+const OP_LABELS={recheck_nodes:'节点复检',refresh_subscription:'订阅刷新',restart_gateway:'网关重启',restore_gateway:'网关恢复',policy_apply:'偏好应用',route_apply:'分流应用'};
+const OP_STATES={verified:'连通性复测通过',completed:'操作已结束，尚无健康验收',applied_unverified:'已应用但尚未验证',
+  pending_rollback:'未完成验收，等待保护回退',rejected:'被拒绝，未执行本次请求',failed:'操作失败，效果未确认',interrupted:'执行被中断，效果未确认',rolled_back:'保护回退已完成'};
+function validOperationReceipt(r){
+  return r&&SESSION.test(r.session_id||'')&&Number.isSafeInteger(r.revision)&&r.revision>0&&
+    r.notice_id===`gateway-operations-${r.session_id.slice(8).replaceAll('-','')}-${r.revision}`&&
+    Array.isArray(r.records)&&r.records.length>0&&r.records.length<=128&&r.records.every(row=>row&&Object.hasOwn(OP_LABELS,row.operation)&&Object.hasOwn(OP_STATES,row.status));
+}
+export function formatOperationNotice(receipt){
+  const counts=new Map();
+  for(const r of receipt.records){
+    const text=OP_LABELS[r.operation]+'：'+OP_STATES[r.status]+(r.status==='rolled_back'&&r.gateway_restarted===true?'，已重启网关':'');
+    counts.set(text,(counts.get(text)||0)+1);
+  }
+  return {summary:'本轮网络操作核对',text:'程序独立记录的网络操作：\n'+[...counts].map(([text,n])=>text+(n>1?`（${n}次）`:'')).join('\n')+
+    '\n目标业务是否恢复仍以实际复测为准。这条核对未调用模型。'};
+}
+export async function deliverOperationNotice(ctx,receipt,callBroker=brokerCall,options={}){
+  if(!validOperationReceipt(receipt))return false;
+  const notice=formatOperationNotice(receipt);
+  const message={id:receipt.notice_id,role:'user',content:[{type:'text',text:notice.text}],
+    source:{kind:'home-gateway-operation-audit',form:'notice',summary:notice.summary}};
+  return deliverNotice(ctx,receipt,message,{operation:'operation_notice_ack',session_id:receipt.session_id,
+    revision:receipt.revision,message_id:receipt.notice_id},callBroker,options);
+}
+
+async function deliverNotice(ctx,receipt,message,ackRequest,callBroker,options) {
   const sid=receipt.session_id;
   const timeoutMs=Number.isFinite(options.timeoutMs)?Math.max(50,Math.min(5000,options.timeoutMs)):5000;
   const deadline=AbortSignal.timeout(timeoutMs);
@@ -61,7 +92,7 @@ export async function deliverSyncNotice(ctx,receipt,callBroker=brokerCall,option
         const activeSignal=AbortSignal.any([signal,maintenanceSignal]);
         const observed=await ctx.sessionController.inspect(sid,activeSignal);
         activeSignal.throwIfAborted();
-        if(!alreadyPresent(observed.events,receipt.notice_id))agent.session.append('user/message',messageFor(receipt),{surfaceOp:'append'});
+        if(!alreadyPresent(observed.events,receipt.notice_id,message.source.kind))agent.session.append('user/message',message,{surfaceOp:'append'});
         if(await ctx.sessions.flush(agent.session)!==true)throw Error('notice persistence unavailable');
         activeSignal.throwIfAborted();
       });
@@ -74,17 +105,16 @@ export async function deliverSyncNotice(ctx,receipt,callBroker=brokerCall,option
         signal.throwIfAborted();
         const {events}=await handle.read(undefined,undefined,{signal});
         signal.throwIfAborted();
-        if(!alreadyPresent(events,receipt.notice_id)) {
+        if(!alreadyPresent(events,receipt.notice_id,message.source.kind)) {
           const seq=events.length?events.at(-1).seq+1:0;
-          await handle.append([{type:'user/message',seq,time:Date.now(),surfaceOp:'append',data:messageFor(receipt)}],{signal});
+          await handle.append([{type:'user/message',seq,time:Date.now(),surfaceOp:'append',data:message}],{signal});
         }
         signal.throwIfAborted();
         await handle.flush({signal});
       } finally {await handle.close();}
     }
     signal.throwIfAborted();
-    const reply=await callBroker({operation:'source_sync_notice_ack',request_id:receipt.id,revision:receipt.revision,
-      session_id:sid,message_id:receipt.notice_id},signal,5000);
+    const reply=await callBroker(ackRequest,signal,5000);
     return reply.ok===true&&reply.result?.acknowledged===true;
   } catch {return false;}
 }
@@ -97,11 +127,15 @@ export function installSyncNotices(ctx,config={},callBroker=brokerCall,timers=gl
     if(running||disposed||config.readOnly)return;
     running=true;
     try {
-      const reply=await callBroker({operation:'source_sync_notices'},lifetime.signal,5000);
-      if(reply.ok!==true||!Array.isArray(reply.result?.notices))return;
-      for(const receipt of reply.result.notices.slice(0,32)) {
-        if(disposed)break;
-        await deliverSyncNotice(ctx,receipt,callBroker,{signal:lifetime.signal});
+      for(const [operation,deliver,limit] of [['source_sync_notices',deliverSyncNotice,32],['operation_notices',deliverOperationNotice,16]]){
+        try{
+          const reply=await callBroker({operation},lifetime.signal,5000);
+          if(reply.ok!==true||!Array.isArray(reply.result?.notices))continue;
+          for(const receipt of reply.result.notices.slice(0,limit)){
+            if(disposed)break;
+            await deliver(ctx,receipt,callBroker,{signal:lifetime.signal});
+          }
+        }catch{ /* The two durable receipt streams recover independently. */ }
       }
     } catch { /* Durable registry remains pending across broker/Web restarts. */ }
     finally {running=false;}

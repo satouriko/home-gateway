@@ -99,6 +99,34 @@ def fixed_tests(source):
     if not observed.get('review_request') or 'real.example.com' not in observed['probe_domains']:
         raise ValueError('protected client failure test requires unresolved review and real target')
     results.append({'case':'recurring_client_failure','passed':True})
+    observed=json.loads(json.dumps(client));observed['history']=[{'at':999,'faults':[]}]
+    observed['business_observations']['checked_at']=1000
+    value=evaluate(source,observed)
+    if not value.get('review_request') or 'real.example.com' not in value['probe_domains']:raise ValueError('new client evidence cannot be suppressed by healthy history')
+    results.append({'case':'new_client_with_healthy_history','passed':True})
+    from diagnostic_input import validate
+    held=json.loads(json.dumps(client));row=held['business_observations']['issues'][0]
+    row['incident']={'requires_attention':False,'status':'closed','priority':'normal','next_review_at':2000}
+    held['business_observations']['checks']={row['domain']:{'result':{'paths':{'direct':{'transport_ok':None},'proxy':{'transport_ok':None}}}}}
+    validate(evaluate(source,held),held);results.append({'case':'disposed_unknown_paths_not_due','passed':True})
+    due=json.loads(json.dumps(held));due['business_observations']['issues'][0]['incident']['requires_attention']=True
+    mixed=json.loads(json.dumps(held));fresh=json.loads(json.dumps(client['business_observations']['issues'][0]))
+    fresh.update(domain='fresh.example.com',fingerprint='new-material-evidence',incident={'requires_attention':True,'new_evidence':True})
+    mixed['business_observations']['issues'].append(fresh)
+    for name,scenario,target in [('disposed_review_due',due,row['domain']),('new_evidence_beside_disposed',mixed,fresh['domain'])]:
+        value=validate(evaluate(source,scenario),scenario)
+        if not value.get('review_request') or target not in value['probe_domains']:raise ValueError('protected new/due client evidence test failed: '+name)
+        results.append({'case':name,'passed':True})
+    for name,new_evidence in [('held_prefix_new_target',True),('held_prefix_due_target',False)]:
+        queued=json.loads(json.dumps(healthy))
+        held_rows=[{'domain':'held'+str(i)+'.example.com','fingerprint':'held-'+str(i),'resolved':False,
+                    'incident':{'requires_attention':False}} for i in range(3)]
+        target={'domain':'later.example.com','fingerprint':'later','resolved':False,
+                'incident':{'requires_attention':True,'new_evidence':new_evidence}}
+        queued['business_observations']={'issues':held_rows+[target],'checks':{}}
+        value=validate(evaluate(source,queued),queued)
+        if target['domain'] not in value['probe_domains']:raise ValueError('protected target selection failed: '+name+'; filter eligible targets before the three-target limit')
+        results.append({'case':name,'passed':True})
     return results
 
 def write_json(path,data):
@@ -107,18 +135,23 @@ def write_json(path,data):
         temp.chmod(0o600);json.dump(data,file,ensure_ascii=False);file.flush();os.fsync(file.fileno())
     temp.replace(path)
 
-def program_action(operation,source=None):
+def program_action(operation,source=None,snapshot=None):
     active=STATE/'diagnostic-active.json'
     if operation=='program_status':
         if not active.exists():return {'active':False}
         current=json.loads(active.read_text())
         return {'active':True,'version':current['version'],'source':current['source'],'tests':current['tests'],'scope':'pure diagnostics only'}
     tests=fixed_tests(source)
+    validation=None
+    if snapshot is not None:
+        from diagnostic_input import receipt
+        validation=receipt(snapshot,evaluate(source,snapshot))
+        tests.append({'case':'live_snapshot','passed':True})
     version=hashlib.sha256(source.encode()).hexdigest()[:16]
-    if operation=='program_test':return {'tests':tests,'version':version,'deployed':False}
+    if operation=='program_test':return {'tests':tests,'version':version,'deployed':False,'live_validation':validation}
     if active.exists():write_json(STATE/'diagnostic-previous.json',json.loads(active.read_text()))
     write_json(active,{'source':source,'version':version,'tests':tests,'published_at':time.time()})
-    return {'tests':tests,'version':version,'deployed':True,'scope':'pure diagnostics only'}
+    return {'tests':tests,'version':version,'deployed':True,'scope':'pure diagnostics only','live_validation':validation}
 
 def inspect_active(snapshot):
     active=STATE/'diagnostic-active.json'

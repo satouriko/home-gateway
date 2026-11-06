@@ -1,9 +1,8 @@
-# 主动巡检（v20）。只读快照，不改用户分流目标。
-# 修复 v19：真实快照里已处置端点通常还有一条“无路径结果”的探测记录
-# （endpoint_unknown/unsupported_protocol），v19 只在完全没有探测记录时才延后，
-# 因此仍会每轮对 amp-api-edge 生成 review_request。v20 改为：观测管线已运行、
-# 近期失败流无该域名、且没有可用路径对照（无探测记录或只有未知/不支持状态）时，
-# 保留记录并延后复核；有路径对照或近期失败时仍复核，防止漏报。
+# 主动巡检（v22）。只读快照，不改用户分流目标。
+# v22 修复目标顺序：先排除有效等待处置，再对可操作目标取前 3，避免 held 前缀遮蔽新/到期目标。
+# v21 按 issue.incident.requires_attention 判断：仅事件上下文明确为 False
+# （有效处置且未到期、无新证据）才延后复核；需关注时越过旧的端点去重。
+# 不再用 recent_faults==0 或缺少 paths 忽略未知事件；固定路径故障保护不变。
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
     status = snapshot.get('status', {})
@@ -68,7 +67,7 @@ def inspect(snapshot):
     business = snapshot.get('business_observations', {})
     issues = business.get('issues', [])
     business_checks = business.get('checks', {})
-    real_targets = [item.get('domain') for item in issues if item.get('domain')][:3]
+    real_targets = [item.get('domain') for item in issues if item.get('domain')]
     stable_fixed_paths = (
         proxy_present and mainland_present and not proxy_bad and not mainland_bad
         and not service_bad and not dns_cn_bad and not dns_foreign_bad
@@ -107,35 +106,35 @@ def inspect(snapshot):
         if row.get('region') == 'US_AUTO' and row.get('ok') is False:
             us_attempts_failed = us_attempts_failed + 1
     if not proxy_present or not mainland_present:
-        parts += ['检查数据缺失，不据此判断路径健康']
+        parts += ['检查数据缺失，不判断路径健康']
     elif service_bad:
-        parts += ['网关服务未 active，交由外部恢复，不建议自行换节点']
+        parts += ['网关服务未 active，交由外部恢复，不自行换节点']
     elif proxy_bad and not mainland_bad:
         action = 'recheck_nodes'
         probes = real_targets
-        parts += ['代理路径失败而国内直连正常，建议重新检测节点']
+        parts += ['代理路径失败而国内直连正常，建议复检节点']
     elif proxy_bad and mainland_bad and pool_selection_failed and us_attempts_failed >= 1:
         action = 'recheck_nodes'
-        parts += ['国内与代理同时失败，但节点池选路记录显示首选美国池连续失败，先做有界节点复检；出口层仍未排除']
+        parts += ['双路径失败但首选美国池选路连续失败，先做有界节点复检；出口层未排除']
     elif proxy_bad and mainland_bad:
         probes = real_targets
-        parts += ['国内与代理同时失败，更像出口或解析层问题，不宜仅换节点']
+        parts += ['双路径失败更像出口或解析层，不宜仅换节点']
     elif mainland_bad:
-        parts += ['国内直连失败而代理正常，问题在直连或解析层，不建议仅换节点']
+        parts += ['直连失败而代理正常，问题在直连或解析层，不换节点']
     elif sustained == 1:
         action = 'recheck_nodes'
         probes = real_targets
-        parts += ['代理时延连续四次高于 1200ms 且此前基线低于 700ms，建议重新检测节点；时延不代表吞吐上限']
+        parts += ['代理时延连续四次>1200ms且此前基线<700ms，建议复检节点；时延不代表吞吐上限']
     else:
-        parts += ['固定国内与代理健康检查通过；用户业务仍以独立观测为准']
+        parts += ['固定国内与代理检查通过；用户业务以独立观测为准']
         if len(pool) >= 2 and len(dead) == len(pool):
-            parts += ['偏好池全部节点测速失败，但固定代理检查通过，测速不可信，不据此刷新订阅或换节点']
+            parts += ['偏好池测速全失败但固定代理通过，测速不可信，不刷新订阅或换节点']
         if node_recent:
-            parts += ['节点池健康探测同时全部失败，与固定代理检查通过矛盾，更像测速假阴性，不据此换节点']
+            parts += ['节点测速全失败但固定代理通过，更像假阴性，不换节点']
     if dns_cn_bad or dns_foreign_bad:
         parts += ['网关 DNS 检查异常，需先看解析层']
     if bootstrap_bad:
-        parts += ['控制路径引导 DNS 检查失败（解析 api.deepseek.com），网关 DNS 与国内/代理检查未受影响，保留观察、不据此换节点']
+        parts += ['引导 DNS 检查失败；网关 DNS 与路径检查未受影响，保留观察、不换节点']
     if 0 < len(dead) < len(pool):
         parts += ['偏好池有%d/%d个节点测速失败' % (len(dead), len(pool))]
     if streak >= 3:
@@ -181,32 +180,34 @@ def inspect(snapshot):
                 faults = entry.get('faults', [])
             if 'client_business:' + domain in faults:
                 recent_faults = recent_faults + 1
-        if unprobe:
-            unprobeable = unprobeable + [domain]
-        elif dual_fail:
-            dial_only = dial_only + [domain]
-        elif (recent_faults == 0 and not paths
-              and (history or business.get('checked_at'))):
-            deferred = deferred + [domain]
+        incident = issue.get('incident')
+        held = incident is not None and incident.get('requires_attention') is False
+        attention = incident is not None and incident.get('requires_attention') is True
+        if unprobe and not attention:
+            unprobeable += [domain]
+        elif dual_fail and not attention:
+            dial_only += [domain]
+        elif held:
+            deferred += [domain]
         else:
-            actionable = actionable + [domain]
-            if recent_faults >= 8:
-                probe_capped = probe_capped + [domain]
-            elif root_rejected:
-                app_rejected = app_rejected + [domain]
+            actionable += [domain]
+            if recent_faults >= 8 and not attention:
+                probe_capped += [domain]
+            elif root_rejected and not attention:
+                app_rejected += [domain]
     if dial_only:
         if stable_fixed_paths:
-            parts += ['固定检查正常但同一客户端端点验证失败，指向端点问题，保留记录不重复升级；未验证业务恢复']
+            parts += ['固定检查正常但该端点验证失败，指向端点问题，保留记录不重复升级；未验证业务恢复']
         else:
-            parts += ['固定检查当前异常且同一端点验证失败，暂不能区分端点与路径问题，待恢复后再判断']
+            parts += ['固定检查异常且该端点验证失败，暂不能区分端点与路径问题，待恢复再判断']
     if unprobeable:
-        parts += ['客户端域名受保护探测无法完成（ValueError/gaierror），原因未确认（不存在、解析失败或超上限）；保留记录不重复探测，非代理或分流故障']
+        parts += ['受保护探测无法完成（ValueError/gaierror），原因未确认；保留记录不重复探测，非代理或分流故障']
     if probe_capped:
-        parts += ['同一端点连续多轮失败，已停止重复探测；问题仍未解决，也未验证业务恢复']
+        parts += ['同一端点连续多轮失败，已停止重复探测；仍未解决，也未验证业务恢复']
     if app_rejected:
-        parts += ['端点根路径 HTTP 4xx（应用层拒绝）且直连/代理传输均可达，停止重复探测与复核；不证明应用层可用']
+        parts += ['根路径 HTTP 4xx 且双路径传输可达，停止重复探测与复核；不证明应用层可用']
     if deferred:
-        parts += ['%d个已知端点近期无失败证据且无可用路径对照，保留记录不重复复核；不表示用户业务已恢复' % len(deferred)]
+        parts += ['%d个端点已处置且未到期或无新证据，保留记录不重复复核；不表示业务已恢复' % len(deferred)]
     newest_business_ts = 0
     for entry in business_checks.values():
         res = entry.get('result', {})
@@ -218,7 +219,7 @@ def inspect(snapshot):
         business_stale = True
     if business_stale and len(issues) > 0:
         hours = (now_ts - newest_business_ts) // 3600
-        parts += ['路径对照约%d小时前采集，不代表当前时刻；固定检查与真实客户端流量优先' % hours]
+        parts += ['路径对照约%d小时前采集，不代表当前时刻；固定检查优先' % hours]
     if pending:
         parts += ['系统已安排节点复检，完成后按新证据判断']
     targets = [
@@ -226,7 +227,7 @@ def inspect(snapshot):
         if item not in dial_only and item not in probe_capped
         and item not in unprobeable and item not in app_rejected
         and item not in deferred
-    ]
+    ][:3]
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
         summary = summary + '；' + part
@@ -237,12 +238,12 @@ def inspect(snapshot):
     if action == 'recheck_nodes':
         note = ''
         if len(issues) > 0 and not pending_recheck:
-            note = '；节点复检已确定，客户端端点复核留待固定路径恢复后'
+            note = '；节点复检已确定，端点复核留待固定路径恢复后'
         return {'summary': summary + note, 'action': action, 'probe_domains': []}
     if len(issues) > 0 and len(reviewable) == 0:
         return {'summary': summary, 'action': action, 'probe_domains': targets}
     if len(issues) > 0 and len(reviewable) > 0 and pending_recheck:
-        return {'summary': summary + '；已知客户端问题保留记录，待节点复检完成后按新证据复核', 'action': action, 'probe_domains': targets}
+        return {'summary': summary + '；客户端问题保留记录，待节点复检后按新证据复核', 'action': action, 'probe_domains': targets}
     if issues:
         first = issues[0]
         matching = [issue for issue in issues if issue.get('domain') in reviewable]

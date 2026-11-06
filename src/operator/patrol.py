@@ -181,8 +181,10 @@ def main():
     history=state.get('history',[])
     history.append({'at':now,'faults':faults,'proxy_ms':diagnosis.get('checks',{}).get('proxy_https',{}).get('result',{}).get('elapsed_ms')})
     history=history[-96:]
-    snapshot={**diagnosis,'observations':diagnosis.get('business_observations',{}),'history':history[-24:]}
+    snapshot={**diagnosis,'checked_at':now,'observations':diagnosis.get('business_observations',{}),'history':history[-24:]}
     if state.get('last_quality'):snapshot['quality_summary']={'preferred_pool':state['last_quality'].get('node_pools',{}).get('us',[]),'active_domains':state['last_quality'].get('active_domains',{})}
+    from diagnostic_input import annotate
+    snapshot=annotate(snapshot,STATE,now)
     program=inspect_active(snapshot)
     if program.get('version')!=state.get('confidence_program_version'):
         state.update(confidence_program_version=program.get('version'),program_started_at=now,healthy_samples=0,successful_audits=0)
@@ -244,6 +246,8 @@ def main():
         preferences={};diagnosis['maintenance_input_errors']=['preferences_storage']
     if program.get('input_unavailable'):
         diagnosis.setdefault('maintenance_input_errors',[]).append('diagnostic_input')
+    if snapshot.get('incident_view',{}).get('available') is False:
+        diagnosis.setdefault('maintenance_input_errors',[]).append('diagnostic_incident_input')
     upkeep=maintenance.observe(state,diagnosis,now,preferences=preferences,directory=STATE)
     if execute_workflow(state,diagnosis,upkeep,now):
         upkeep=maintenance.observe(state,diagnosis,now,preferences=preferences,directory=STATE)

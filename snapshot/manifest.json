@@ -122,7 +122,7 @@
     },
     "docs/operator/CONTRACTS.md": {
       "mode": 420,
-      "sha256": "0968a61ea8dc9e35d6b9f53e0cc07108dcf0712aebafa9870b9835c087e1cbd0"
+      "sha256": "041b200e36bf6d3f74bf013e8344184e534ed369e6d96e614ff07612dcd181ef"
     },
     "preferences/audit-plan.json": {
       "mode": 384,
@@ -182,11 +182,11 @@
     },
     "snapshot/maintained-tests.json": {
       "mode": 384,
-      "sha256": "da95fb2f88ff98d60fcefce17452501b6a8faee751bd299442d2eb2b32c30858"
+      "sha256": "996f06b466d87e96f98f1de513639e461d33b65aac176191f204d76a381abe08"
     },
     "snapshot/published/diagnostic-active.json": {
       "mode": 384,
-      "sha256": "66ebd441131d9a6353a126f8ff239d01881df98527a5e01fac54e522313e1247"
+      "sha256": "33ee89f50da4e4ca169b8866322e5cf720e616f8128c9d931c01cd976b08916b"
     },
     "snapshot/published/tool-active.json": {
       "mode": 384,
@@ -206,7 +206,7 @@
     },
     "src/dsh/identity.txt": {
       "mode": 420,
-      "sha256": "83e818df72700205b1af05bcf1e12bc45e9e6d0ded011fce07ebb6de34c79143"
+      "sha256": "0d35efe82670a2d3eb8a6c613bc5d1820bcd168c2bcf946bd54ade1b394d9245"
     },
     "src/dsh/lan-auto-login.mjs": {
       "mode": 416,
@@ -214,7 +214,7 @@
     },
     "src/dsh/maintenance-prompt.txt": {
       "mode": 420,
-      "sha256": "d32140582c508fa4125a022ba88f555d55ed23410f237fc0663a31cf70ea8c31"
+      "sha256": "1393dfd8d94942b360bbaea2d8ed094178b601b5b5f090235220e0cbae0b162c"
     },
     "src/dsh/mobile-layout.mjs": {
       "mode": 416,
@@ -238,7 +238,7 @@
     },
     "src/dsh/operator.mjs": {
       "mode": 420,
-      "sha256": "e0bf3d776d5300d0818a9c36aa9c72e83f70c9df3a65e245dc4905df32f4e4dc"
+      "sha256": "30cee7d415360697bfd510b6492ceae0ca6ae1beb2769ac23a0ab6b9f88d066e"
     },
     "src/dsh/routing-request.mjs": {
       "mode": 420,
@@ -250,7 +250,7 @@
     },
     "src/dsh/sync-notices.mjs": {
       "mode": 420,
-      "sha256": "0eae528766fc7cafc89b42dd93b060abf09df8ee43e409866be4afc70508d81c"
+      "sha256": "47340dc8a335a23c7edc33d3a56769d92dfa07b5bb0bafb8c00c5b2fde97499d"
     },
     "src/gateway/gateway_maintain.py": {
       "mode": 493,
@@ -262,7 +262,7 @@
     },
     "src/maintained/diagnostic.py": {
       "mode": 384,
-      "sha256": "f8d63333a020716af51c274c94b5c5a6ae3a5dbe4a4123a6c722b0ef4063f19c"
+      "sha256": "8401f369c39dee04d270fd861306bd3ad30dcc3557324ceae1570e21c4fa1464"
     },
     "src/maintained/tool.py": {
       "mode": 384,
@@ -290,7 +290,7 @@
     },
     "src/operator/broker.py": {
       "mode": 420,
-      "sha256": "a839fddd353610f3d273b24bcf85f824c94ef4f826dbd8e7a6a822df0ac3b7dd"
+      "sha256": "0ee794133be6c4360b89f93aa65ec8d4c1d3d09a50e9aa7f39ab8072d5f30de3"
     },
     "src/operator/business_probe.py": {
       "mode": 420,
@@ -316,9 +316,13 @@
       "mode": 493,
       "sha256": "6b9ecd40fdfd727d2dd61b9e48e0d994b224e896b8757e9ed6a45890c3fe8ca3"
     },
+    "src/operator/diagnostic_input.py": {
+      "mode": 420,
+      "sha256": "d0dd860252927bb9eccc1f3a5ba0184649842a3e3a6284e17781a5fd86d8b29d"
+    },
     "src/operator/evidence.py": {
       "mode": 420,
-      "sha256": "e780b8907395b08e03741906d844af6ec7a0a258db1545cf1ceebe768fe767c6"
+      "sha256": "c38f029ee2a86e7461ca7bf8c7e9e8929ff5337c043550f69aabb9257833db0b"
     },
     "src/operator/extensions.py": {
       "mode": 420,
@@ -326,7 +330,7 @@
     },
     "src/operator/incidents.py": {
       "mode": 420,
-      "sha256": "2ce849ac76749565d1f3fc5efa652af975dc7b2a12694b36d1019296c4bf075e"
+      "sha256": "90107e7986af54cb1f66a78d5d85d76de311d28ff0262692cb31136f9ba7f3aa"
     },
     "src/operator/maintenance.py": {
       "mode": 420,
@@ -334,11 +338,15 @@
     },
     "src/operator/native_jobs.py": {
       "mode": 420,
-      "sha256": "623a9d53f6e84c2a27017f211c3991bb5e79381e2a6f4789417cbe5c66ec0265"
+      "sha256": "473e78fa8a90e3c20cb8d5793e15a043abe8b981c032286f5ae6ec066ed22abd"
     },
     "src/operator/node_health.py": {
       "mode": 420,
       "sha256": "355b17561d79faceeed4c5242c773e68162c55fc7be12ca9ae2f14b6da9ad840"
+    },
+    "src/operator/operation_history.py": {
+      "mode": 420,
+      "sha256": "c74427642d41dfe6e9153d6104bd0c6eb7d6d2f07cf34be2c50fb7e8c6063303"
     },
     "src/operator/overview.py": {
       "mode": 420,
@@ -346,11 +354,11 @@
     },
     "src/operator/patrol.py": {
       "mode": 420,
-      "sha256": "cd90bbabe2c84f849c54467f958b8bba6cd61564e27edf9e19514439cdb7ef35"
+      "sha256": "cab31c738d1bef3b3a0fec44f472c69a467cc5fd8a66a792ef634531bc9be4a2"
     },
     "src/operator/policy.py": {
       "mode": 420,
-      "sha256": "8fb49065167d04c39c554a65499a25b5cad98deab57b15020af5df75b3edb0ca"
+      "sha256": "a8389d116c212202eb82234b96fa605f4ec3e24f3ae985ea40bc87cb9dadb23a"
     },
     "src/operator/pricing.py": {
       "mode": 493,
@@ -362,7 +370,7 @@
     },
     "src/operator/programs.py": {
       "mode": 493,
-      "sha256": "6029c8ec3833b78acbef22de5052be34df2836df0f71d1603b08ee2ce7501ce9"
+      "sha256": "f84c0baccd1e579761356a8bb1ac40fdb34955ddf6c6b582a71a7d799c5a3926"
     },
     "src/operator/route_evidence.py": {
       "mode": 420,
@@ -418,7 +426,7 @@
     },
     "tests/maintained/test_active_sources.py": {
       "mode": 420,
-      "sha256": "b5568691db39a748cbe4e212fc3cbbb867eaab09c68fb49bc10d4c705b34c6e9"
+      "sha256": "b657d17a7e17734881f71e6a811277c1f4f5a2d2b791775953f4b9558cfca017"
     }
   },
   "format": 1,

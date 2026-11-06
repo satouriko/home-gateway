@@ -6,6 +6,29 @@ from unittest.mock import patch
 from programs import validate_source, validate_output,evaluate
 
 class ProgramBoundaryTests(unittest.TestCase):
+    def test_fixed_acceptance_rejects_diagnostics_ignoring_a_disposition_lease(self):
+        import programs
+        source="""def inspect(s):
+    issues=s.get('business_observations',{}).get('issues',[])
+    if issues:
+        first=issues[0]
+        return {'summary':'client failure','action':'none','probe_domains':[first['domain']], 'review_request':{'fingerprint':first['fingerprint'],'reason':'review'}}
+    return {'summary':'checks','action':'recheck_nodes' if s.get('checks',{}).get('proxy_https',{}).get('ok') is False else 'none','probe_domains':[]}
+"""
+        with patch.object(programs.os,'geteuid',return_value=1000):
+            with self.assertRaisesRegex(ValueError,'review deadline'):programs.fixed_tests(source)
+
+    def test_live_snapshot_failure_cannot_replace_an_existing_program(self):
+        import programs
+        with tempfile.TemporaryDirectory() as folder,patch.object(programs,'STATE',Path(folder)):
+            p=Path(folder)/'diagnostic-active.json';p.write_text('{"version":"old","source":"old","tests":[]}');old=p.read_bytes()
+            snapshot={'checked_at':1000,'business_observations':{'issues':[{'domain':'service.example.com','fingerprint':'held',
+                'incident':{'requires_attention':False}}]}}
+            output={'summary':'check','action':'none','probe_domains':['service.example.com']}
+            with patch.object(programs,'fixed_tests',return_value=[]),patch.object(programs,'evaluate',return_value=output):
+                with self.assertRaisesRegex(ValueError,'review deadline'):programs.program_action('program_publish','candidate',snapshot=snapshot)
+            self.assertEqual(p.read_bytes(),old)
+
     def test_real_worker_accepts_bounded_observation_growth(self):
         source="def inspect(snapshot):\n return {'summary':'real child','action':'none','probe_domains':[]}\n"
         with patch('programs.os.geteuid',return_value=1000):

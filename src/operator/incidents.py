@@ -30,6 +30,17 @@ def decision_facts(facts):
     return {k:v for k,v in facts.items() if k not in {'failure_count','last_seen','connections_seen','observed_bytes_lower_bound'}}
 
 
+def observation_change(case,signal,now):
+    changed=signal['signature']!=case['signature']
+    escalated=signal.get('priority','urgent')=='urgent' and case.get('source_priority',case['priority'])!='urgent'
+    material=decision_facts(signal.get('facts',{}))!=decision_facts(case['facts'])
+    recurrence=bool((case.get('reopen_on_activity') or case.get('outcome')=='fixed') and
+        signal.get('observed_at',now)>case.get('decided_at',now) and signal.get('facts',{}).get('current_failure') is True)
+    reopens=changed or escalated or (material and case['status'] in ['closed','blocked']) or (case['status']=='closed' and recurrence)
+    if signal.get('observed_at',now)<case.get('last_observed_at',0):reopens=False
+    return {'changed':changed,'material':material,'reopens':reopens}
+
+
 def requires_attention(case,now):
     """Include inconsistent legacy urgency for actor triage without changing its record."""
     if not finite(now):raise ValueError('valid review time required')
@@ -139,11 +150,8 @@ class IncidentStore:
                     self._history(case,{'at':now,'kind':'opened','signature':signature})
                     continue
                 if at<case.get('last_observed_at',0):continue
-                changed=signature!=case['signature']
-                escalated=priority=='urgent' and case.get('source_priority',case['priority'])!='urgent'
-                material=decision_facts(facts)!=decision_facts(case['facts'])
-                recurrence=bool((case.get('reopen_on_activity') or case.get('outcome')=='fixed') and at>case.get('decided_at',now) and facts.get('current_failure') is True)
-                reopen=changed or escalated or (material and case['status'] in ['closed','blocked']) or (case['status']=='closed' and recurrence)
+                change=observation_change(case,signal,now)
+                changed,material,reopen=change['changed'],change['material'],change['reopens']
                 if reopen:
                     case.update(status='open',revision=case['revision']+1,next_review_at=now,outcome=None,
                                 network_restored=False,updated_at=now,reason='new evidence requires disposition')
