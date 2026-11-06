@@ -110,12 +110,19 @@ def inspect(snapshot):
     elif service_bad:
         parts += ['网关服务未 active，交由外部恢复，不自行换节点']
     elif proxy_bad and not mainland_bad:
-        action = 'recheck_nodes'
         probes = real_targets
-        parts += ['代理路径失败而国内直连正常，建议复检节点']
+        if bootstrap_bad:
+            parts += ['代理失败且引导 DNS 同时异常，更像本地上联/解析层，暂不安排节点复检']
+        else:
+            action = 'recheck_nodes'
+            parts += ['代理路径失败而国内直连正常，建议复检节点']
     elif proxy_bad and mainland_bad and pool_selection_failed and us_attempts_failed >= 1:
-        action = 'recheck_nodes'
-        parts += ['双路径失败但首选美国池选路连续失败，先做有界节点复检；出口层未排除']
+        probes = real_targets
+        if bootstrap_bad:
+            parts += ['双路径失败且引导 DNS 异常，先看本地上联，暂不安排节点复检']
+        else:
+            action = 'recheck_nodes'
+            parts += ['双路径失败但首选美国池选路连续失败，先做有界节点复检；出口层未排除']
     elif proxy_bad and mainland_bad:
         probes = real_targets
         parts += ['双路径失败更像出口或解析层，不宜仅换节点']
