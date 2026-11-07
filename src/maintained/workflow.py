@@ -16,23 +16,40 @@ def inspect(snapshot):
     # 事件簿重开会保持 urgent；这里识别“已处置旧失败仅因受保护探测签名变化重开”
     # 的场景，只停止重复探测，不降低 wake、不隐藏事件。实时摘要（maintenance._case）
     # 不带 last_observed_at/history，只带 decided_at 与 progress 最后一条，所以主判据
-    # 建立在 decided_at、progress 与 facts.paths 上：处置至少 2 小时、最近进展是
-    # evidence_changed、最新对照两侧都没有 failed_samples。真实新失败仍会列出并在
-    # 900 秒内唤醒处理；兼容带完整 history/last_observed_at 的快照形状。
+    # 建立在 decided_at、progress 与 facts 上：处置至少 2 小时、最近进展是
+    # evidence_changed、最新对照没有 failed_samples。若事件端点本身是 UDP/ICMP，
+    # 受保护探测无法验证应用层，重复探测只会让事件签名在“无样本/旧样本”之间翻转、
+    # 反复重开，因此这类不可验证端点同样视为复查噪声。TCP 端点没有可用样本时
+    # 不静默，仍请求探测补齐证据。真实新失败与传输失败样本不会静默：前者仍保持
+    # urgent 列出并在 900 秒内唤醒处理，后者明确排除。
     reopen_noise_domains = {case.get('domain') for case in flagged
-        if case.get('status') == 'open' and case.get('outcome') is None and case.get('domain') and
-           (case.get('facts') or {}).get('kind') == 'recurring_client_failure' and
-           (case.get('facts') or {}).get('current_failure') is True and
-           len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
-                if (item.get('failed_samples') or 0) >= 1]) == 0 and
-           (((case.get('decided_at') is not None) and (now - case.get('decided_at') >= 7200)) and
-            (len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
-                  if (item.get('sample_count') or 0) > 0]) > 0) and
-            (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed')) or
-           ((case.get('last_observed_at') is not None) and
-            (case.get('last_observed_at') <= max([case.get('decided_at') or 0] +
-             [item.get('at') or 0 for item in (case.get('history') or []) if item.get('kind') == 'disposition'])) and
-            (now - case.get('last_observed_at') >= 7200))}
+        if (
+            case.get('status') == 'open' and
+            case.get('outcome') is None and
+            case.get('domain') and
+            (case.get('facts') or {}).get('kind') == 'recurring_client_failure' and
+            (case.get('facts') or {}).get('current_failure') is True and
+            len([item for item in (((case.get('facts') or {}).get('paths') or {}).values())
+                 if (item.get('failed_samples') or 0) >= 1]) == 0 and
+            (
+                (
+                    case.get('decided_at') is not None and
+                    (now - case.get('decided_at')) >= 7200 and
+                    ((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed' and
+                    (
+                        len([item for item in (((case.get('facts') or {}).get('paths') or {}).values())
+                             if (item.get('sample_count') or 0) > 0]) > 0 or
+                        ((case.get('facts') or {}).get('endpoint') or {}).get('network') in ['udp', 'icmp']
+                    )
+                ) or
+                (
+                    case.get('last_observed_at') is not None and
+                    case.get('last_observed_at') <= max([case.get('decided_at') or 0] +
+                        [item.get('at') or 0 for item in (case.get('history') or []) if item.get('kind') == 'disposition']) and
+                    (now - case.get('last_observed_at')) >= 7200
+                )
+            )
+        )}
 
     urgent_cases = flagged
     normal_cases = [case for case in incidents
