@@ -2,6 +2,12 @@ def inspect(snapshot):
     now = int(snapshot['now'])
     health = snapshot.get('path_health') or {}
     hard_faults = [str(item) for item in (health.get('hard_faults') or [])][:16]
+    checks = health.get('checks') or {}
+    fixed_ok = (
+        (checks.get('proxy_https') or {}).get('ok') is True and
+        (checks.get('mainland_https') or {}).get('ok') is True
+    )
+    pool_only = hard_faults == ['proxy_node_pool']
 
     incidents = snapshot.get('incidents') or []
     urgent_cases = [case for case in incidents
@@ -35,7 +41,12 @@ def inspect(snapshot):
               candidate.get('current_path_bad') is not False and
               (candidate.get('business_basis') or candidate.get('business_requirement_evidence_ids'))][:3]
 
-    if hard_faults:
+    if pool_only and fixed_ok:
+        # 首选池短时选路失败、但两条固定检查正常时，流量已按用户策略回退；
+        # 保持紧急（硬故障不能降级为 routine），但把复查间隔从 60s 放宽到 300s，
+        # 避免同一节点池抖动期间重复购买同一次分析。任一固定检查失败则仍按 60s。
+        delay = 300
+    elif hard_faults:
         delay = 60
     elif urgent_cases:
         delay = 120
@@ -43,7 +54,9 @@ def inspect(snapshot):
         future = [int(case['next_review_at'] - now) for case in incidents if case['next_review_at'] > now]
         delay = max(60, min(900, min(future))) if future else 900
 
-    if hard_faults:
+    if pool_only and fixed_ok:
+        summary = '检测到首选节点池选路失败，但固定代理与国内检查通过；流量按用户策略回退其他地区，降低重复复查频率，未验证用户业务恢复。'
+    elif hard_faults:
         summary = '检测到 %d 项固定路径硬故障；立即复查。' % len(hard_faults)
     elif urgent_cases:
         summary = '%d 个紧急事件待处理；按证据复核并保留有限复查期限。' % len(urgent_cases)
