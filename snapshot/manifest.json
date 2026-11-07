@@ -182,7 +182,7 @@
     },
     "snapshot/maintained-tests.json": {
       "mode": 384,
-      "sha256": "5bf1d17bb2f969265546c131b65e3e59b22aae4567381e91cb2786f18cece571"
+      "sha256": "ad47c5c8c7c4080c75773724dba54ce77c5623428f19033550ad29b9f76991cf"
     },
     "snapshot/published/diagnostic-active.json": {
       "mode": 384,
@@ -194,7 +194,7 @@
     },
     "snapshot/published/workflow-active.json": {
       "mode": 384,
-      "sha256": "98c0cb38a6e80cc40f5ff112da92c6395693be6f124665956daed4645b647c31"
+      "sha256": "5bc5b495d8e1322c29f8583e3d203d750d81c638ccec3eb9bd8197bc0033d183"
     },
     "src/dsh/AGENTS.md": {
       "mode": 416,
@@ -274,7 +274,7 @@
     },
     "src/maintained/workflow.py": {
       "mode": 384,
-      "sha256": "dc6ba212c07cc1faaccd8d2669b62c36ae7fd31f787a7335d5a05e6b3508a00c"
+      "sha256": "7cb1e47fa4fdd28335a239e1b0c835a580cb7a7cdae27716fd10353523c5288b"
     },
     "src/operator/adaptive_routing.py": {
       "mode": 420,

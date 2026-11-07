@@ -12,25 +12,28 @@ def inspect(snapshot):
     incidents = snapshot.get('incidents') or []
     flagged = [case for case in incidents
                if case.get('priority') == 'urgent' and case.get('requires_attention') is True]
-    # 事件簿在证据签名变化时会重开已处置事件；若该端点最近一次真实客户端失败
-    # 仍早于最后一次处置，且受保护探测没有给出任何传输失败样本，则属于“复查噪声”。
-    # 这类重开没有新客户端失败。validator 仍要求紧急事件保持 urgent 且必须列出，
-    # 所以不能降低 wake；但必须停止对它再次探测，否则每次探测都会改写签名并再次
-    # 重开，形成“关注→探测→签名变化→关注”的自持循环。真实传输失败不会静默。
-    reopen_noise_domains = set([
-        case.get('domain') for case in flagged
-        if case.get('status') == 'open' and case.get('outcome') is None and
-        case.get('domain') and
-        (case.get('facts') or {}).get('kind') == 'recurring_client_failure' and
-        len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
-             if (item.get('failed_samples') or 0) >= 1]) == 0 and
-        case.get('last_observed_at') is not None and
-        case.get('last_observed_at') <= max(
-            [case.get('decided_at') or 0] +
-            [item.get('at') or 0 for item in (case.get('history') or [])
-             if item.get('kind') == 'disposition']) and
-        (now - case.get('last_observed_at')) >= 7200
-    ])
+
+    # 事件簿重开会保持 urgent；这里识别“已处置旧失败仅因受保护探测签名变化重开”
+    # 的场景，只停止重复探测，不降低 wake、不隐藏事件。实时摘要（maintenance._case）
+    # 不带 last_observed_at/history，只带 decided_at 与 progress 最后一条，所以主判据
+    # 建立在 decided_at、progress 与 facts.paths 上：处置至少 2 小时、最近进展是
+    # evidence_changed、最新对照两侧都没有 failed_samples。真实新失败仍会列出并在
+    # 900 秒内唤醒处理；兼容带完整 history/last_observed_at 的快照形状。
+    reopen_noise_domains = {case.get('domain') for case in flagged
+        if case.get('status') == 'open' and case.get('outcome') is None and case.get('domain') and
+           (case.get('facts') or {}).get('kind') == 'recurring_client_failure' and
+           (case.get('facts') or {}).get('current_failure') is True and
+           len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
+                if (item.get('failed_samples') or 0) >= 1]) == 0 and
+           (((case.get('decided_at') is not None) and (now - case.get('decided_at') >= 7200)) and
+            (len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
+                  if (item.get('sample_count') or 0) > 0]) > 0) and
+            (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed')) or
+           ((case.get('last_observed_at') is not None) and
+            (case.get('last_observed_at') <= max([case.get('decided_at') or 0] +
+             [item.get('at') or 0 for item in (case.get('history') or []) if item.get('kind') == 'disposition'])) and
+            (now - case.get('last_observed_at') >= 7200))}
+
     urgent_cases = flagged
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
@@ -42,8 +45,7 @@ def inspect(snapshot):
         if case.get('domain'):
             case_by_domain[case['domain']] = case
 
-    quiet_domains = set([case['domain'] for case in flagged
-                         if case.get('domain') in reopen_noise_domains])
+    quiet_domains = set(reopen_noise_domains)
 
     observations = snapshot.get('observations') or {}
     probes = [str(entry['domain']) for entry in (observations.get('domains') or [])
@@ -65,8 +67,6 @@ def inspect(snapshot):
               candidate.get('current_path_bad') is not False and
               (candidate.get('business_basis') or candidate.get('business_requirement_evidence_ids'))][:3]
 
-    # 仅复查噪声时保持紧急但放宽到租约允许的最大复查间隔，避免同一旧失败在
-    # 探测循环里反复唤醒模型；真实新失败或硬故障仍按短间隔。
     noise_only = bool(urgent_cases) and all([case.get('domain') in reopen_noise_domains
                                              for case in urgent_cases])
     if pool_only and fixed_ok:
@@ -75,11 +75,9 @@ def inspect(snapshot):
         delay = 60
     elif urgent_cases:
         delay = 900 if noise_only else 120
-    elif normal_cases:
-        future = [int(case['next_review_at'] - now) for case in incidents if case['next_review_at'] > now]
-        delay = max(60, min(900, min(future))) if future else 900
     else:
-        future = [int(case['next_review_at'] - now) for case in incidents if case['next_review_at'] > now]
+        future = [int(case['next_review_at'] - now) for case in incidents
+                  if case.get('next_review_at', 0) > now]
         delay = max(60, min(900, min(future))) if future else 900
 
     if pool_only and fixed_ok:
