@@ -1,8 +1,3 @@
-# 主动巡检（v24）。只读快照，不改用户分流目标。
-# v22 修复目标顺序：先排除有效等待处置，再对可操作目标取前 3，避免 held 前缀遮蔽新/到期目标。
-# v21 按 issue.incident.requires_attention 判断：仅事件上下文明确为 False
-# （有效处置且未到期、无新证据）才延后复核；需关注时越过旧的端点去重。
-# 不再用 recent_faults==0 或缺少 paths 忽略未知事件；固定路径故障保护不变。
 def inspect(snapshot):
     checks = snapshot.get('checks', {})
     status = snapshot.get('status', {})
@@ -31,7 +26,6 @@ def inspect(snapshot):
                             or (count is not None and count < 1))
     dns_cn_bad = dns_bad.get('gateway_dns_cn', False)
     dns_foreign_bad = dns_bad.get('gateway_dns_foreign', False)
-
     bootstrap = checks.get('bootstrap_dns_api', {})
     bootstrap_bad = 'bootstrap_dns_api' in checks and bootstrap.get('ok') is not True
     service_bad = services.get('net-gateway.service', {}).get('ActiveState', 'active') != 'active'
@@ -42,20 +36,6 @@ def inspect(snapshot):
         for entry in history
         if entry.get('proxy_ms') is not None and entry.get('proxy_ms') >= 1
     ]
-    flags = []
-    for entry in history[-6:]:
-        path_faults = 0
-        for item in entry.get('faults') or []:
-            if item[:15] != 'client_business':
-                path_faults = path_faults + 1
-        flags = flags + [1 if path_faults > 0 else 0]
-    streak = 0
-    running = 1
-    for offset in range(len(flags)):
-        if running == 1 and flags[len(flags) - 1 - offset] == 1:
-            streak = streak + 1
-        else:
-            running = 0
     sustained = 0
     if len(samples) >= 6:
         earlier = sorted(samples[:-4])
@@ -106,46 +86,44 @@ def inspect(snapshot):
         if row.get('region') == 'US_AUTO' and row.get('ok') is False:
             us_attempts_failed = us_attempts_failed + 1
     if not proxy_present or not mainland_present:
-        parts += ['检查数据缺失，不判断路径健康']
+        parts += ['检查缺失，不判断健康']
     elif service_bad:
-        parts += ['网关服务未 active，交由外部恢复，不自行换节点']
+        parts += ['服务未 active，交由外部恢复']
     elif proxy_bad and not mainland_bad:
         probes = real_targets
         if bootstrap_bad:
-            parts += ['代理失败且引导 DNS 同时异常，更像本地上联/解析层，暂不安排节点复检']
+            parts += ['代理失败且引导 DNS 异常，先查本地上联']
         else:
             action = 'recheck_nodes'
-            parts += ['代理路径失败而国内直连正常，建议复检节点']
+            parts += ['代理失败、直连正常，建议复检节点']
     elif proxy_bad and mainland_bad and pool_selection_failed and us_attempts_failed >= 1:
         probes = real_targets
         if bootstrap_bad:
-            parts += ['双路径失败且引导 DNS 异常，先看本地上联，暂不安排节点复检']
+            parts += ['双路径失败且引导 DNS 异常，先查本地上联']
         else:
             action = 'recheck_nodes'
-            parts += ['双路径失败但首选美国池选路连续失败，先做有界节点复检；出口层未排除']
+            parts += ['双路径失败且首选池选路失败，先做有界复检']
     elif proxy_bad and mainland_bad:
         probes = real_targets
-        parts += ['双路径失败更像出口或解析层，不宜仅换节点']
+        parts += ['双路径失败更像出口/解析层，不换节点']
     elif mainland_bad:
-        parts += ['直连失败而代理正常，问题在直连或解析层，不换节点']
+        parts += ['直连失败、代理正常，不换节点']
     elif sustained == 1:
         action = 'recheck_nodes'
         probes = real_targets
-        parts += ['代理时延连续四次>1200ms且此前基线<700ms，建议复检节点；时延不代表吞吐上限']
+        parts += ['代理时延连续四次>1200ms且基线<700ms，建议复检节点']
     else:
-        parts += ['固定国内与代理检查通过；用户业务以独立观测为准']
+        parts += ['固定检查通过；业务独立观测']
         if len(pool) >= 2 and len(dead) == len(pool):
-            parts += ['偏好池测速全失败但固定代理通过，测速不可信，不刷新订阅或换节点']
+            parts += ['偏好池测速全失败，测速不可信']
         if node_recent:
-            parts += ['节点测速全失败但固定代理通过，更像假阴性，不换节点']
+            parts += ['节点测速全失败，不换节点']
     if dns_cn_bad or dns_foreign_bad:
         parts += ['网关 DNS 检查异常，需先看解析层']
     if bootstrap_bad:
-        parts += ['引导 DNS 检查失败；网关 DNS 与路径检查未受影响，保留观察、不换节点']
+        parts += ['引导 DNS 失败；网关 DNS 与路径正常，保留观察']
     if 0 < len(dead) < len(pool):
         parts += ['偏好池有%d/%d个节点测速失败' % (len(dead), len(pool))]
-    if streak >= 3:
-        parts += ['同一故障连续出现%d次' % streak]
     probe_errors = {}
     for key in checks:
         if key[:7] == 'target:' and checks[key].get('ok') is not True:
@@ -161,9 +139,14 @@ def inspect(snapshot):
     app_rejected = []
     deferred = []
     udp_unverified = []
+    unverifiable = []
     for issue in issues:
         domain = issue.get('domain')
-        paths = business_checks.get(domain, {}).get('result', {}).get('paths', {})
+        paths = (business_checks.get(domain) or {}).get('result', {}).get('paths', {})
+        if not paths:
+            for entry in business.get('domains', []):
+                if entry.get('domain') == domain:
+                    paths = ((entry.get('check') or {}).get('result') or {}).get('paths') or {}
         direct = paths.get('direct', {})
         proxy_path = paths.get('proxy', {})
         d_fail = direct.get('transport_ok') is False and (direct.get('failed_samples') or 0) >= 1
@@ -191,6 +174,8 @@ def inspect(snapshot):
         incident = issue.get('incident')
         held = incident is not None and incident.get('requires_attention') is False
         attention = incident is not None and incident.get('requires_attention') is True
+        probed = [p for p in paths.values() if (p.get('sample_count') or 0) >= 1]
+        unknown_only = len(probed) > 0 and all([(p.get('success_samples') or 0) == 0 and (p.get('failed_samples') or 0) == 0 for p in probed])
         if (issue.get('endpoint') or {}).get('network') in ('udp', 'icmp') and not d_fail and not p_fail:
             udp_unverified += [domain]
         elif unprobe and not attention:
@@ -199,6 +184,8 @@ def inspect(snapshot):
             dial_only += [domain]
         elif held:
             deferred += [domain]
+        elif unknown_only and not d_fail and not p_fail:
+            unverifiable += [domain]
         else:
             actionable += [domain]
             if recent_faults >= 8 and not attention:
@@ -207,19 +194,21 @@ def inspect(snapshot):
                 app_rejected += [domain]
     if dial_only:
         if stable_fixed_paths:
-            parts += ['固定检查正常但该端点验证失败，指向端点问题，保留记录不重复升级；未验证业务恢复']
+            parts += ['固定检查正常、端点失败']
         else:
-            parts += ['固定检查异常且该端点验证失败，暂不能区分端点与路径问题，待恢复再判断']
+            parts += ['固定检查异常且端点失败']
     if unprobeable:
-        parts += ['受保护探测无法完成（ValueError/gaierror），原因未确认；保留记录不重复探测，非代理或分流故障']
+        parts += ['受保护探测无法完成']
     if probe_capped:
-        parts += ['同一端点连续多轮失败，已停止重复探测；仍未解决，也未验证业务恢复']
+        parts += ['同一端点连续失败，停止探测']
     if app_rejected:
-        parts += ['根路径 HTTP 4xx 且双路径传输可达，停止重复探测与复核；不证明应用层可用']
+        parts += ['根路径 4xx，停止重复探测']
     if deferred:
-        parts += ['%d个端点已处置且未到期或无新证据，保留记录不重复复核；不表示业务已恢复' % len(deferred)]
+        parts += ['%d个端点已处置且未到期，保留记录不重复复核；不表示业务恢复' % len(deferred)]
     if udp_unverified:
-        parts += ['%d个UDP/ICMP端点无法验证，停止重复探测；不表示业务恢复' % len(udp_unverified)]
+        parts += ['%d个UDP/ICMP端点无法验证，停止探测；不表示业务恢复' % len(udp_unverified)]
+    if unverifiable:
+        parts += ['%d个端点只得到unknown样本，停止探测并保留复查；不表示业务恢复' % len(unverifiable)]
     newest_business_ts = 0
     for entry in business_checks.values():
         res = entry.get('result', {})
@@ -231,7 +220,7 @@ def inspect(snapshot):
         business_stale = True
     if business_stale and len(issues) > 0:
         hours = (now_ts - newest_business_ts) // 3600
-        parts += ['路径对照约%d小时前采集，不代表当前时刻；固定检查优先' % hours]
+        parts += ['路径对照约%d小时前采集，固定检查优先' % hours]
     if pending:
         parts += ['系统已安排节点复检，完成后按新证据判断']
     targets = [
@@ -239,6 +228,7 @@ def inspect(snapshot):
         if item not in dial_only and item not in probe_capped
         and item not in unprobeable and item not in app_rejected
         and item not in deferred and item not in udp_unverified
+        and item not in unverifiable
     ][:3]
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
@@ -261,5 +251,5 @@ def inspect(snapshot):
         matching = [issue for issue in issues if issue.get('domain') in reviewable]
         if matching:
             first = matching[0]
-        return {'summary': summary + '；实际客户端问题尚未解决', 'action': action, 'probe_domains': targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
+        return {'summary': summary + '；客户端问题未解决', 'action': action, 'probe_domains': targets, 'review_request': {'fingerprint': first.get('fingerprint', 'client-business-gap'), 'reason': '实际客户端反复失败，需要定向验证和持续处理，不能被固定检查成功覆盖'}}
     return {'summary': summary, 'action': action, 'probe_domains': probes}
