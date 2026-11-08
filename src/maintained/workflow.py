@@ -60,7 +60,58 @@ def inspect(snapshot):
                   if (item.get('sample_count') or 0) > 0]) > 0) and
             (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed'))}
 
+    # 刚处置后的同一零字节后台重试仍会继续（例如 PCDN 统计端点轮换端口）。
+    # 这类“新证据”是同一个未恢复问题的延续，不是新故障：保留 urgent 与记录，
+    # 按 15 分钟复查，不重复探测不可验证的轮换端口。只在零字节、应用协议未知、
+    # 两侧都没有真实传输样本、且处置后确有新客户端失败时适用；出现新类别、
+    # 真实流量或传输失败即回到 120 秒与正常探测。
     urgent_cases = flagged
+    burst_domains = []
+    for case in urgent_cases:
+        domain = case.get('domain')
+        facts = case.get('facts') or {}
+        paths = facts.get('paths') or {}
+        endpoint = facts.get('endpoint') or {}
+        entries = [entry for entry in obs_domains if entry.get('domain') == domain]
+        eligible = (bool(domain) and case.get('status') == 'open'
+                    and case.get('outcome') is None
+                    and facts.get('kind') == 'recurring_client_failure'
+                    and facts.get('current_failure') is True
+                    and endpoint.get('application_protocol') == 'unknown'
+                    and len(paths) > 0 and len(entries) > 0
+                    and entries[0].get('observed_bytes_lower_bound') == 0)
+        if eligible:
+            decided = case.get('decided_at')
+            if decided is not None and now >= decided and (now - decided) <= 1800:
+                path_ok = True
+                for item in paths.values():
+                    if (item.get('failed_samples') or 0) >= 1:
+                        path_ok = False
+                    if (item.get('success_samples') or 0) >= 1:
+                        path_ok = False
+                    if (item.get('sample_count') or 0) < 1:
+                        path_ok = False
+                if path_ok:
+                    stamps = []
+                    if case.get('last_observed_at') is not None:
+                        stamps = stamps + [case.get('last_observed_at')]
+                    stamps = stamps + [entry.get('last_failure_at') for entry in entries
+                                       if entry.get('last_failure_at') is not None]
+                    for entry in biz_domains:
+                        if entry.get('domain') == domain:
+                            stamps = stamps + [issue.get('last_failure_at')
+                                               for issue in (entry.get('issues') or [])
+                                               if issue.get('last_failure_at') is not None]
+                    fresh = False
+                    for stamp in stamps:
+                        if stamp > decided:
+                            fresh = True
+                    if fresh:
+                        burst_domains = burst_domains + [domain]
+    burst_only = bool(urgent_cases)
+    for case in urgent_cases:
+        if case.get('domain') not in burst_domains:
+            burst_only = False
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
     selected = [case['id'] for case in (urgent_cases + normal_cases)][:16]
@@ -76,6 +127,7 @@ def inspect(snapshot):
     probes = [str(entry['domain']) for entry in obs_domains
               if entry.get('needs_probe') is True and entry.get('domain') and
               entry.get('domain') not in quiet_domains and
+              entry.get('domain') not in burst_domains and
               not (case_by_domain.get(entry['domain']) and
                    case_by_domain[entry['domain']].get('facts', {}).get('paths') and
                    all([item.get('transport_ok') is False
@@ -99,7 +151,7 @@ def inspect(snapshot):
     elif hard_faults:
         delay = 60
     elif urgent_cases:
-        delay = 900 if noise_only else 120
+        delay = 900 if (noise_only or burst_only) else 120
     else:
         future = [int(case['next_review_at'] - now) for case in incidents
                   if case.get('next_review_at', 0) > now]
@@ -113,6 +165,8 @@ def inspect(snapshot):
         summary = '%d 个紧急事件待处理；按证据复核并保留有限复查期限。' % len(urgent_cases)
         if noise_only:
             summary = summary + '其中仅探测签名变化、且已确认无新客户端失败，停止重复探测并放宽复查，避免自持重开。'
+        if burst_only:
+            summary = summary + '其中零字节后台重试在刚处置后继续，属同一未恢复问题；保留记录并按15分钟复查，不重复探测轮换端口。'
     elif normal_cases:
         summary = '%d 个普通事件待复核；按租约处理。' % len(normal_cases)
     else:
