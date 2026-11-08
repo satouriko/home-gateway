@@ -13,43 +13,52 @@ def inspect(snapshot):
     flagged = [case for case in incidents
                if case.get('priority') == 'urgent' and case.get('requires_attention') is True]
 
-    # 事件簿重开会保持 urgent；这里识别“已处置旧失败仅因受保护探测签名变化重开”
-    # 的场景，只停止重复探测，不降低 wake、不隐藏事件。实时摘要（maintenance._case）
-    # 不带 last_observed_at/history，只带 decided_at 与 progress 最后一条，所以主判据
-    # 建立在 decided_at、progress 与 facts 上：处置至少 2 小时、最近进展是
-    # evidence_changed、最新对照没有 failed_samples。若事件端点本身是 UDP/ICMP，
-    # 受保护探测无法验证应用层，重复探测只会让事件签名在“无样本/旧样本”之间翻转、
-    # 反复重开，因此这类不可验证端点同样视为复查噪声。TCP 端点没有可用样本时
-    # 不静默，仍请求探测补齐证据。真实新失败与传输失败样本不会静默：前者仍保持
-    # urgent 列出并在 900 秒内唤醒处理，后者明确排除。
+    observations = snapshot.get('observations') or {}
+    business = snapshot.get('business_observations') or {}
+    obs_domains = observations.get('domains') or []
+    biz_domains = business.get('domains') or []
+
+    # 判断处置后是否出现新的真实客户端失败。实时摘要可能不带 last_observed_at，
+    # 因此同时读取观测域与 business_observations 的失败时间戳；都拿不到时返回未知，
+    # 不能据此声称“无新客户端失败”。
+    noise_verdict = {}
+    candidate_cases = [case for case in flagged
+                       if case.get('status') == 'open' and case.get('outcome') is None and
+                       case.get('domain') and
+                       (case.get('facts') or {}).get('kind') == 'recurring_client_failure' and
+                       (case.get('facts') or {}).get('current_failure') is True]
+    for case in candidate_cases:
+        domain_now = case.get('domain')
+        decided = case.get('decided_at') or 0
+        stamps = []
+        if case.get('last_observed_at') is not None:
+            stamps = stamps + [case.get('last_observed_at')]
+        stamps = stamps + [entry.get('last_failure_at') for entry in obs_domains
+                           if entry.get('domain') == domain_now
+                           and entry.get('last_failure_at') is not None]
+        for entry in biz_domains:
+            if entry.get('domain') == domain_now:
+                stamps = stamps + [issue.get('last_failure_at')
+                                   for issue in (entry.get('issues') or [])
+                                   if issue.get('last_failure_at') is not None]
+        if len(stamps) == 0:
+            noise_verdict[domain_now] = False
+        else:
+            noise_verdict[domain_now] = not any([stamp > decided for stamp in stamps])
+
+    # 事件簿重开会保持 urgent；这里只识别“已处置旧失败仅因受保护探测签名变化重开”
+    # 的场景：处置至少 2 小时、最近进展是 evidence_changed、最新对照两侧都没有
+    # failed_samples，并且有正证据表明处置后没有新的真实客户端失败。缺少该时间戳
+    # 时按“无法排除新客户端失败”处理，不放宽复查，也不写“无新客户端失败”。
     reopen_noise_domains = {case.get('domain') for case in flagged
-        if (
-            case.get('status') == 'open' and
-            case.get('outcome') is None and
-            case.get('domain') and
-            (case.get('facts') or {}).get('kind') == 'recurring_client_failure' and
-            (case.get('facts') or {}).get('current_failure') is True and
-            len([item for item in (((case.get('facts') or {}).get('paths') or {}).values())
-                 if (item.get('failed_samples') or 0) >= 1]) == 0 and
-            (
-                (
-                    case.get('decided_at') is not None and
-                    (now - case.get('decided_at')) >= 7200 and
-                    ((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed' and
-                    (
-                        len([item for item in (((case.get('facts') or {}).get('paths') or {}).values())
-                             if (item.get('sample_count') or 0) > 0]) > 0 or
-                        ((case.get('facts') or {}).get('endpoint') or {}).get('network') in ['udp', 'icmp']
-                    )
-                ) or
-                (
-                    case.get('last_observed_at') is not None and
-                    case.get('last_observed_at') <= max([case.get('decided_at') or 0] +
-                        [item.get('at') or 0 for item in (case.get('history') or []) if item.get('kind') == 'disposition']) and
-                    (now - case.get('last_observed_at')) >= 7200
-                )
-            )
-        )}
+        if noise_verdict.get(case.get('domain')) is True and
+           (case.get('facts') or {}).get('current_failure') is True and
+           len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
+                if (item.get('failed_samples') or 0) >= 1]) == 0 and
+           (((case.get('decided_at') is not None) and (now - case.get('decided_at') >= 7200)) and
+            (len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
+                  if (item.get('sample_count') or 0) > 0]) > 0) and
+            (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed'))}
 
     urgent_cases = flagged
     normal_cases = [case for case in incidents
@@ -64,8 +73,7 @@ def inspect(snapshot):
 
     quiet_domains = set(reopen_noise_domains)
 
-    observations = snapshot.get('observations') or {}
-    probes = [str(entry['domain']) for entry in (observations.get('domains') or [])
+    probes = [str(entry['domain']) for entry in obs_domains
               if entry.get('needs_probe') is True and entry.get('domain') and
               entry.get('domain') not in quiet_domains and
               not (case_by_domain.get(entry['domain']) and
@@ -104,7 +112,7 @@ def inspect(snapshot):
     elif urgent_cases:
         summary = '%d 个紧急事件待处理；按证据复核并保留有限复查期限。' % len(urgent_cases)
         if noise_only:
-            summary = summary + '其中仅探测签名变化、无新客户端失败，已停止重复探测并放宽复查，避免自持重开。'
+            summary = summary + '其中仅探测签名变化、且已确认无新客户端失败，停止重复探测并放宽复查，避免自持重开。'
     elif normal_cases:
         summary = '%d 个普通事件待复核；按租约处理。' % len(normal_cases)
     else:
