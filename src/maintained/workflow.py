@@ -81,6 +81,12 @@ def inspect(snapshot):
                     and len(paths) > 0 and len(entries) > 0
                     and entries[0].get('observed_bytes_lower_bound') == 0)
         if eligible:
+            cats_now = entries[0].get('error_categories') or []
+            cats_facts = facts.get('error_categories') or []
+            for cat in cats_now:
+                if cats_facts and cat not in cats_facts:
+                    eligible = False
+        if eligible:
             decided = case.get('decided_at')
             if decided is not None and now >= decided and (now - decided) <= 1800:
                 path_ok = True
@@ -108,10 +114,52 @@ def inspect(snapshot):
                             fresh = True
                     if fresh:
                         burst_domains = burst_domains + [domain]
+    # 已处置的 unknown 样本端点（如轮换动态端口的 PCDN 统计）：受保护探测只有
+    # unknown 样本，不产生成功/失败证据；重复探测只改变签名并让已处置事件自持重开。
+    # 真实快照可能不带 facts/paths/next_review_at，因此同时读取 business check 结果；
+    # 只看“已有处置记录 + 零字节 + 全部路径只有 unknown 样本 + 无新错误类别”。
+    unverifiable_domains = []
+    for case in urgent_cases:
+        domain = case.get('domain')
+        facts = case.get('facts') or {}
+        entries = [entry for entry in obs_domains if entry.get('domain') == domain]
+        decided = case.get('decided_at')
+        paths = facts.get('paths') or {}
+        if not paths:
+            for entry in biz_domains:
+                if entry.get('domain') == domain:
+                    paths = ((entry.get('check') or {}).get('result') or {}).get('paths') or {}
+        eligible = (bool(domain) and case.get('status') == 'open'
+                    and case.get('outcome') is None and decided is not None
+                    and len(entries) > 0
+                    and entries[0].get('observed_bytes_lower_bound') == 0
+                    and len(paths) > 0
+                    and (len(facts) == 0 or (facts.get('kind') == 'recurring_client_failure'
+                                             and facts.get('current_failure') is True)))
+        path_unknown = eligible
+        for item in paths.values():
+            if ((item.get('sample_count') or 0) < 1
+                    or (item.get('success_samples') or 0) > 0
+                    or (item.get('failed_samples') or 0) > 0):
+                path_unknown = False
+        cats_now = []
+        if len(entries) > 0:
+            cats_now = entries[0].get('error_categories') or []
+        cats_facts = facts.get('error_categories') or []
+        new_category = False
+        for cat in cats_now:
+            if cats_facts and cat not in cats_facts:
+                new_category = True
+        if path_unknown and not new_category:
+            unverifiable_domains = unverifiable_domains + [domain]
     burst_only = bool(urgent_cases)
     for case in urgent_cases:
         if case.get('domain') not in burst_domains:
             burst_only = False
+    unverifiable_only = bool(urgent_cases)
+    for case in urgent_cases:
+        if case.get('domain') not in unverifiable_domains:
+            unverifiable_only = False
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
     selected = [case['id'] for case in (urgent_cases + normal_cases)][:16]
@@ -127,6 +175,7 @@ def inspect(snapshot):
     probes = [str(entry['domain']) for entry in obs_domains
               if entry.get('needs_probe') is True and entry.get('domain') and
               entry.get('domain') not in quiet_domains and
+              entry.get('domain') not in unverifiable_domains and
               entry.get('domain') not in burst_domains and
               not (case_by_domain.get(entry['domain']) and
                    case_by_domain[entry['domain']].get('facts', {}).get('paths') and
@@ -151,7 +200,7 @@ def inspect(snapshot):
     elif hard_faults:
         delay = 60
     elif urgent_cases:
-        delay = 900 if (noise_only or burst_only) else 120
+        delay = 900 if (noise_only or burst_only or unverifiable_only) else 120
     else:
         future = [int(case['next_review_at'] - now) for case in incidents
                   if case.get('next_review_at', 0) > now]
@@ -167,6 +216,8 @@ def inspect(snapshot):
             summary = summary + '其中仅探测签名变化、且已确认无新客户端失败，停止重复探测并放宽复查，避免自持重开。'
         if burst_only:
             summary = summary + '其中零字节后台重试在刚处置后继续，属同一未恢复问题；保留记录并按15分钟复查，不重复探测轮换端口。'
+        if unverifiable_only:
+            summary = summary + '受保护探测只得到unknown样本的端点停止重复探测，保留事件与复查期限，不表示业务恢复。'
     elif normal_cases:
         summary = '%d 个普通事件待复核；按租约处理。' % len(normal_cases)
     else:

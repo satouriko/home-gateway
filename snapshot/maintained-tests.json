@@ -86,6 +86,10 @@
       "reason": "nonportable_test"
     },
     {
+      "name": "test_inspect_v25.py",
+      "reason": "nonportable_test"
+    },
+    {
       "name": "test_probe_cap.py",
       "reason": "nonportable_test"
     },
@@ -107,6 +111,10 @@
     },
     {
       "name": "test_workflow_20261108c.py",
+      "reason": "nonportable_test"
+    },
+    {
+      "name": "test_workflow_20261108d.py",
       "reason": "nonportable_test"
     },
     {
