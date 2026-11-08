@@ -182,11 +182,11 @@
     },
     "snapshot/maintained-tests.json": {
       "mode": 384,
-      "sha256": "f12e23c7edf89fc02c7ebc633ac72c3791318857dab1a4c075d6f3e2268739ea"
+      "sha256": "cb9e7e07f014672d93ac6744728197ad0ba3573d52a853da234176c7c7d1f237"
     },
     "snapshot/published/diagnostic-active.json": {
       "mode": 384,
-      "sha256": "768cc5d292012d495162d4d9ed2e71ed0d166df0cf397d0aa85fd56ceb3fee3a"
+      "sha256": "e12f9b4b2ec1c932c9c6b7992229963ce873f887811be4138234e1f2f8e7e662"
     },
     "snapshot/published/tool-active.json": {
       "mode": 384,
@@ -262,7 +262,7 @@
     },
     "src/maintained/diagnostic.py": {
       "mode": 384,
-      "sha256": "5ceb4b51c86b586450e434add12cfe36fa79654c6efc5a2e37733e858cc78f2c"
+      "sha256": "ecbfb6168d31b8df33b9fe5d881f162f3a99aaed38eeebdc392572220d642fc8"
     },
     "src/maintained/tool.py": {
       "mode": 384,

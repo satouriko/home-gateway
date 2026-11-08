@@ -1,4 +1,4 @@
-# 主动巡检（v22）。只读快照，不改用户分流目标。
+# 主动巡检（v24）。只读快照，不改用户分流目标。
 # v22 修复目标顺序：先排除有效等待处置，再对可操作目标取前 3，避免 held 前缀遮蔽新/到期目标。
 # v21 按 issue.incident.requires_attention 判断：仅事件上下文明确为 False
 # （有效处置且未到期、无新证据）才延后复核；需关注时越过旧的端点去重。
@@ -160,6 +160,7 @@ def inspect(snapshot):
     unprobeable = []
     app_rejected = []
     deferred = []
+    udp_unverified = []
     for issue in issues:
         domain = issue.get('domain')
         paths = business_checks.get(domain, {}).get('result', {}).get('paths', {})
@@ -190,7 +191,9 @@ def inspect(snapshot):
         incident = issue.get('incident')
         held = incident is not None and incident.get('requires_attention') is False
         attention = incident is not None and incident.get('requires_attention') is True
-        if unprobe and not attention:
+        if (issue.get('endpoint') or {}).get('network') in ('udp', 'icmp') and not d_fail and not p_fail:
+            udp_unverified += [domain]
+        elif unprobe and not attention:
             unprobeable += [domain]
         elif dual_fail and not attention:
             dial_only += [domain]
@@ -215,6 +218,8 @@ def inspect(snapshot):
         parts += ['根路径 HTTP 4xx 且双路径传输可达，停止重复探测与复核；不证明应用层可用']
     if deferred:
         parts += ['%d个端点已处置且未到期或无新证据，保留记录不重复复核；不表示业务已恢复' % len(deferred)]
+    if udp_unverified:
+        parts += ['%d个UDP/ICMP端点无法验证，停止重复探测；不表示业务恢复' % len(udp_unverified)]
     newest_business_ts = 0
     for entry in business_checks.values():
         res = entry.get('result', {})
@@ -233,7 +238,7 @@ def inspect(snapshot):
         item for item in real_targets
         if item not in dial_only and item not in probe_capped
         and item not in unprobeable and item not in app_rejected
-        and item not in deferred
+        and item not in deferred and item not in udp_unverified
     ][:3]
     summary = parts[0] if len(parts) > 0 else '无检查数据'
     for part in parts[1:]:
