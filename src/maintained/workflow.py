@@ -60,12 +60,23 @@ def inspect(snapshot):
                   if (item.get('sample_count') or 0) > 0]) > 0) and
             (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed'))}
 
-    # 刚处置后的同一零字节后台重试仍会继续（例如 PCDN 统计端点轮换端口）。
-    # 这类“新证据”是同一个未恢复问题的延续，不是新故障：保留 urgent 与记录，
-    # 按 15 分钟复查，不重复探测不可验证的轮换端口。只在零字节、应用协议未知、
-    # 两侧都没有真实传输样本、且处置后确有新客户端失败时适用；出现新类别、
-    # 真实流量或传输失败即回到 120 秒与正常探测。
+    # 刚处置后的零字节后台重试属同一问题延续：保留 urgent、15分钟复查、不重复探测。
     urgent_cases = flagged
+    # 只剩 unknown 样本的端点不再重复探测。
+    unknown_check_domains = []
+    for entry in biz_domains:
+        check_paths = ((entry.get('check') or {}).get('result') or {}).get('paths') or {}
+        probe_n = 0
+        unknown_n = 0
+        for item in check_paths.values():
+            if (item.get('sample_count') or 0) >= 1:
+                probe_n = probe_n + 1
+            if ((item.get('sample_count') or 0) >= 1
+                    and (item.get('success_samples') or 0) == 0
+                    and (item.get('failed_samples') or 0) == 0):
+                unknown_n = unknown_n + 1
+        if probe_n >= 1 and unknown_n == probe_n and entry.get('domain'):
+            unknown_check_domains = unknown_check_domains + [entry.get('domain')]
     burst_domains = []
     for case in urgent_cases:
         domain = case.get('domain')
@@ -114,52 +125,50 @@ def inspect(snapshot):
                             fresh = True
                     if fresh:
                         burst_domains = burst_domains + [domain]
-    # 已处置的 unknown 样本端点（如轮换动态端口的 PCDN 统计）：受保护探测只有
-    # unknown 样本，不产生成功/失败证据；重复探测只改变签名并让已处置事件自持重开。
-    # 真实快照可能不带 facts/paths/next_review_at，因此同时读取 business check 结果；
-    # 只看“已有处置记录 + 零字节 + 全部路径只有 unknown 样本 + 无新错误类别”。
+    # 已定案且对照只剩 unknown 样本：重复探测只改签名并自持重开；停止探测，复查15分钟。
     unverifiable_domains = []
     for case in urgent_cases:
         domain = case.get('domain')
-        facts = case.get('facts') or {}
-        entries = [entry for entry in obs_domains if entry.get('domain') == domain]
-        decided = case.get('decided_at')
-        paths = facts.get('paths') or {}
-        if not paths:
-            for entry in biz_domains:
-                if entry.get('domain') == domain:
-                    paths = ((entry.get('check') or {}).get('result') or {}).get('paths') or {}
-        eligible = (bool(domain) and case.get('status') == 'open'
-                    and case.get('outcome') is None and decided is not None
-                    and len(entries) > 0
-                    and entries[0].get('observed_bytes_lower_bound') == 0
-                    and len(paths) > 0
-                    and (len(facts) == 0 or (facts.get('kind') == 'recurring_client_failure'
-                                             and facts.get('current_failure') is True)))
-        path_unknown = eligible
-        for item in paths.values():
-            if ((item.get('sample_count') or 0) < 1
-                    or (item.get('success_samples') or 0) > 0
-                    or (item.get('failed_samples') or 0) > 0):
-                path_unknown = False
-        cats_now = []
-        if len(entries) > 0:
-            cats_now = entries[0].get('error_categories') or []
-        cats_facts = facts.get('error_categories') or []
-        new_category = False
-        for cat in cats_now:
-            if cats_facts and cat not in cats_facts:
-                new_category = True
-        if path_unknown and not new_category:
-            unverifiable_domains = unverifiable_domains + [domain]
-    burst_only = bool(urgent_cases)
-    for case in urgent_cases:
-        if case.get('domain') not in burst_domains:
-            burst_only = False
+        ok = (bool(domain) and case.get('status') == 'open'
+              and case.get('outcome') is None
+              and case.get('decided_at') is not None)
+        if ok:
+            facts = case.get('facts') or {}
+            entries = [e for e in obs_domains if e.get('domain') == domain]
+            cats = facts.get('error_categories') or []
+            for e in entries:
+                if e.get('observed_bytes_lower_bound') not in (None, 0):
+                    ok = False
+                for cat in (e.get('error_categories') or []):
+                    if cats and cat not in cats:
+                        ok = False
+            paths = facts.get('paths') or {}
+            check_paths = []
+            for e in biz_domains:
+                if e.get('domain') == domain:
+                    check_paths = [((e.get('check') or {}).get('result') or {}).get('paths') or {}]
+            seen = False
+            unknown = True
+            for ps in [paths] + check_paths:
+                if ps:
+                    seen = True
+                    if not all([(p.get('sample_count') or 0) >= 1
+                                and (p.get('success_samples') or 0) == 0
+                                and (p.get('failed_samples') or 0) == 0
+                                for p in ps.values()]):
+                        unknown = False
+            if ok and not (seen and unknown):
+                ok = False
+            if ok:
+                unverifiable_domains = unverifiable_domains + [domain]
     unverifiable_only = bool(urgent_cases)
     for case in urgent_cases:
         if case.get('domain') not in unverifiable_domains:
             unverifiable_only = False
+    burst_only = bool(urgent_cases)
+    for case in urgent_cases:
+        if case.get('domain') not in burst_domains:
+            burst_only = False
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
     selected = [case['id'] for case in (urgent_cases + normal_cases)][:16]
@@ -175,6 +184,7 @@ def inspect(snapshot):
     probes = [str(entry['domain']) for entry in obs_domains
               if entry.get('needs_probe') is True and entry.get('domain') and
               entry.get('domain') not in quiet_domains and
+              entry.get('domain') not in unknown_check_domains and
               entry.get('domain') not in unverifiable_domains and
               entry.get('domain') not in burst_domains and
               not (case_by_domain.get(entry['domain']) and
