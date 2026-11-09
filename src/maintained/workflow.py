@@ -46,18 +46,17 @@ def inspect(snapshot):
         else:
             noise_verdict[domain_now] = not any([stamp > decided for stamp in stamps])
 
-    # 事件簿重开会保持 urgent；这里只识别“已处置旧失败仅因受保护探测签名变化重开”
-    # 的场景：处置至少 2 小时、最近进展是 evidence_changed、最新对照两侧都没有
-    # failed_samples，并且有正证据表明处置后没有新的真实客户端失败。缺少该时间戳
-    # 时按“无法排除新客户端失败”处理，不放宽复查，也不写“无新客户端失败”。
+    # 仅探测签名变化重开（处置≥2h、无失败样本、处置后无新客户端失败）；
+    # UDP/unknown 端点没有 paths 也允许，避免反复探测自持重开。
     reopen_noise_domains = {case.get('domain') for case in flagged
         if noise_verdict.get(case.get('domain')) is True and
            (case.get('facts') or {}).get('current_failure') is True and
            len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
                 if (item.get('failed_samples') or 0) >= 1]) == 0 and
            (((case.get('decided_at') is not None) and (now - case.get('decided_at') >= 7200)) and
-            (len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
-                  if (item.get('sample_count') or 0) > 0]) > 0) and
+            (any([(item.get('sample_count') or 0) > 0
+                  for item in ((case.get('facts') or {}).get('paths') or {}).values()]) or
+             ((case.get('facts') or {}).get('endpoint') or {}).get('application_protocol') == 'unknown') and
             (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed'))}
 
     # 刚处置后的零字节后台重试属同一问题延续：保留 urgent、15分钟复查、不重复探测。
