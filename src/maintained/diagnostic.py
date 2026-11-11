@@ -101,8 +101,7 @@ def inspect(snapshot):
         if bootstrap_bad:
             parts += ['双路径失败且引导 DNS 异常，先查本地上联']
         else:
-            action = 'recheck_nodes'
-            parts += ['双路径失败且首选池选路失败，先做有界复检']
+            parts += ['双路径失败且首选池选路失败，更像共同上游中断，等待恢复不换节点']
     elif proxy_bad and mainland_bad:
         probes = real_targets
         parts += ['双路径失败更像出口/解析层，不换节点']
