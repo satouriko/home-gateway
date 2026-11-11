@@ -18,9 +18,7 @@ def inspect(snapshot):
     obs_domains = observations.get('domains') or []
     biz_domains = business.get('domains') or []
 
-    # 判断处置后是否出现新的真实客户端失败。实时摘要可能不带 last_observed_at，
-    # 因此同时读取观测域与 business_observations 的失败时间戳；都拿不到时返回未知，
-    # 不能据此声称“无新客户端失败”。
+    # 判断处置后是否有新的真实客户端失败；时间戳缺失时返回未知。
     noise_verdict = {}
     candidate_cases = [case for case in flagged
                        if case.get('status') == 'open' and case.get('outcome') is None and
@@ -46,8 +44,7 @@ def inspect(snapshot):
         else:
             noise_verdict[domain_now] = not any([stamp > decided for stamp in stamps])
 
-    # 仅探测签名变化重开（处置≥2h、无失败样本、处置后无新客户端失败）；
-    # UDP/unknown 端点没有 paths 也允许，避免反复探测自持重开。
+    # 仅探测签名变化重开（处置≥2h、无失败样本、处置后无新客户端失败）。
     reopen_noise_domains = {case.get('domain') for case in flagged
         if noise_verdict.get(case.get('domain')) is True and
            (case.get('facts') or {}).get('current_failure') is True and
@@ -59,23 +56,16 @@ def inspect(snapshot):
              ((case.get('facts') or {}).get('endpoint') or {}).get('application_protocol') == 'unknown') and
             (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed'))}
 
-    # 刚处置后的零字节后台重试属同一问题延续：保留 urgent、15分钟复查、不重复探测。
+    # 刚处置后的零字节重试：保留 urgent、15分钟复查。
     urgent_cases = flagged
-    # 只剩 unknown 样本的端点不再重复探测。
+    # 只剩 unknown 样本的端点不再重复探测（含 tracked_probes 来源）。
     unknown_check_domains = []
-    for entry in biz_domains:
-        check_paths = ((entry.get('check') or {}).get('result') or {}).get('paths') or {}
-        probe_n = 0
-        unknown_n = 0
-        for item in check_paths.values():
-            if (item.get('sample_count') or 0) >= 1:
-                probe_n = probe_n + 1
-            if ((item.get('sample_count') or 0) >= 1
-                    and (item.get('success_samples') or 0) == 0
-                    and (item.get('failed_samples') or 0) == 0):
-                unknown_n = unknown_n + 1
-        if probe_n >= 1 and unknown_n == probe_n and entry.get('domain'):
-            unknown_check_domains = unknown_check_domains + [entry.get('domain')]
+    sources = [(e.get('domain'), ((e.get('check') or {}).get('result') or {}).get('paths') or {}) for e in biz_domains]
+    sources += [(p.get('target'), (p.get('paths') or {})) for p in (snapshot.get('tracked_probes') or {}).values()]
+    for domain, paths in sources:
+        probed = [p for p in paths.values() if (p.get('sample_count') or 0) >= 1]
+        if domain and probed and all([(p.get('success_samples') or 0) == 0 and (p.get('failed_samples') or 0) == 0 for p in probed]):
+            unknown_check_domains = unknown_check_domains + [str(domain)]
     burst_domains = []
     for case in urgent_cases:
         domain = case.get('domain')
@@ -124,7 +114,7 @@ def inspect(snapshot):
                             fresh = True
                     if fresh:
                         burst_domains = burst_domains + [domain]
-    # 已定案且对照只剩 unknown 样本：重复探测只改签名并自持重开；停止探测，复查15分钟。
+    # 已定案且仅 unknown 样本：停止探测。
     unverifiable_domains = []
     for case in urgent_cases:
         domain = case.get('domain')
