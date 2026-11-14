@@ -136,6 +136,10 @@
     {
       "name": "test_workflow_live_shape.py",
       "reason": "nonportable_test"
+    },
+    {
+      "name": "test_workflow_unsupported_protocol.py",
+      "reason": "nonportable_test"
     }
   ],
   "format": 1,

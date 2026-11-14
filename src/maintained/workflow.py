@@ -18,7 +18,6 @@ def inspect(snapshot):
     obs_domains = observations.get('domains') or []
     biz_domains = business.get('domains') or []
 
-    # 判断处置后是否有新的真实客户端失败；时间戳缺失时返回未知。
     noise_verdict = {}
     candidate_cases = [case for case in flagged
                        if case.get('status') == 'open' and case.get('outcome') is None and
@@ -44,7 +43,6 @@ def inspect(snapshot):
         else:
             noise_verdict[domain_now] = not any([stamp > decided for stamp in stamps])
 
-    # 仅探测签名变化重开（处置≥2h、无失败样本、处置后无新客户端失败）。
     reopen_noise_domains = {case.get('domain') for case in flagged
         if noise_verdict.get(case.get('domain')) is True and
            (case.get('facts') or {}).get('current_failure') is True and
@@ -56,9 +54,7 @@ def inspect(snapshot):
              ((case.get('facts') or {}).get('endpoint') or {}).get('application_protocol') == 'unknown') and
             (((case.get('progress') or [])[-1].get('kind') if case.get('progress') else None) == 'evidence_changed'))}
 
-    # 刚处置后的零字节重试：保留 urgent、15分钟复查。
     urgent_cases = flagged
-    # 只剩 unknown 样本的端点不再重复探测（含 tracked_probes 来源）。
     unknown_check_domains = []
     sources = [(e.get('domain'), ((e.get('check') or {}).get('result') or {}).get('paths') or {}) for e in biz_domains]
     sources += [(p.get('target'), (p.get('paths') or {})) for p in (snapshot.get('tracked_probes') or {}).values()]
@@ -66,6 +62,10 @@ def inspect(snapshot):
         probed = [p for p in paths.values() if (p.get('sample_count') or 0) >= 1]
         if domain and probed and all([(p.get('success_samples') or 0) == 0 and (p.get('failed_samples') or 0) == 0 for p in probed]):
             unknown_check_domains = unknown_check_domains + [str(domain)]
+    unsupported = [str(e['domain']) for e in biz_domains
+                           if e.get('domain') and (((e.get('check') or {}).get('result') or {}).get('state')) == 'unsupported_protocol']
+    unsupported = unsupported + [str(p['target']) for p in (snapshot.get('tracked_probes') or {}).values()
+                                                 if p.get('state') == 'unsupported_protocol' and p.get('target')]
     burst_domains = []
     for case in urgent_cases:
         domain = case.get('domain')
@@ -114,8 +114,7 @@ def inspect(snapshot):
                             fresh = True
                     if fresh:
                         burst_domains = burst_domains + [domain]
-    # 已定案且仅 unknown 样本：停止探测。
-    unverifiable_domains = []
+    unver = []
     for case in urgent_cases:
         domain = case.get('domain')
         ok = (bool(domain) and case.get('status') == 'open'
@@ -149,10 +148,14 @@ def inspect(snapshot):
             if ok and not (seen and unknown):
                 ok = False
             if ok:
-                unverifiable_domains = unverifiable_domains + [domain]
+                unver = unver + [domain]
+    for case in urgent_cases:
+        d = case.get('domain')
+        if d in unsupported and case.get('status') == 'open' and case.get('outcome') is None:
+            unver = unver + [d]
     unverifiable_only = bool(urgent_cases)
     for case in urgent_cases:
-        if case.get('domain') not in unverifiable_domains:
+        if case.get('domain') not in unver:
             unverifiable_only = False
     burst_only = bool(urgent_cases)
     for case in urgent_cases:
@@ -174,16 +177,15 @@ def inspect(snapshot):
               if entry.get('needs_probe') is True and entry.get('domain') and
               entry.get('domain') not in quiet_domains and
               entry.get('domain') not in unknown_check_domains and
-              entry.get('domain') not in unverifiable_domains and
+              entry.get('domain') not in unver and
               entry.get('domain') not in burst_domains and
+              entry.get('domain') not in unsupported and
               not (case_by_domain.get(entry['domain']) and
                    case_by_domain[entry['domain']].get('facts', {}).get('paths') and
-                   all([item.get('transport_ok') is False
-                        for item in case_by_domain[entry['domain']]['facts']['paths'].values()])) and
-              not (case_by_domain.get(entry['domain']) and
-                   case_by_domain[entry['domain']].get('facts', {}).get('paths') and
-                   all([item.get('application_state') == 'rejected'
-                        for item in case_by_domain[entry['domain']]['facts']['paths'].values()]))][:3]
+                   (all([item.get('transport_ok') is False
+                         for item in case_by_domain[entry['domain']]['facts']['paths'].values()]) or
+                    all([item.get('application_state') == 'rejected'
+                         for item in case_by_domain[entry['domain']]['facts']['paths'].values()])))][:3]
 
     routing = snapshot.get('routing') or {}
     routes = [str(candidate['domain']) for candidate in (routing.get('candidates') or [])
