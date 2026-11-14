@@ -163,8 +163,10 @@ def inspect(snapshot):
             burst_only = False
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
+    noise_only = bool(urgent_cases) and all([case.get('domain') in reopen_noise_domains
+                                             for case in urgent_cases])
     selected = [case['id'] for case in (urgent_cases + normal_cases)][:16]
-    wake = 'urgent' if (hard_faults or urgent_cases) else ('routine' if normal_cases else 'none')
+    wake = 'urgent' if (hard_faults or (urgent_cases and not noise_only)) else ('routine' if (normal_cases or urgent_cases) else 'none')
 
     case_by_domain = {}
     for case in urgent_cases + normal_cases:
@@ -194,8 +196,6 @@ def inspect(snapshot):
               candidate.get('current_path_bad') is not False and
               (candidate.get('business_basis') or candidate.get('business_requirement_evidence_ids'))][:3]
 
-    noise_only = bool(urgent_cases) and all([case.get('domain') in reopen_noise_domains
-                                             for case in urgent_cases])
     if pool_only and fixed_ok:
         delay = 300
     elif hard_faults:

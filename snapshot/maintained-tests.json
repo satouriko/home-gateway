@@ -138,6 +138,10 @@
       "reason": "nonportable_test"
     },
     {
+      "name": "test_workflow_noise_wake.py",
+      "reason": "nonportable_test"
+    },
+    {
       "name": "test_workflow_unsupported_protocol.py",
       "reason": "nonportable_test"
     }
