@@ -142,6 +142,10 @@
       "reason": "nonportable_test"
     },
     {
+      "name": "test_workflow_snapshot_contract.py",
+      "reason": "nonportable_test"
+    },
+    {
       "name": "test_workflow_unsupported_protocol.py",
       "reason": "nonportable_test"
     }

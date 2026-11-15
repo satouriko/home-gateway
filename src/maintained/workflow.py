@@ -39,7 +39,7 @@ def inspect(snapshot):
                                    for issue in (entry.get('issues') or [])
                                    if issue.get('last_failure_at') is not None]
         if len(stamps) == 0:
-            noise_verdict[domain_now] = False
+            noise_verdict[domain_now] = ((case.get('facts') or {}).get('endpoint') or {}).get('application_protocol') == 'unknown'
         else:
             noise_verdict[domain_now] = not any([stamp > decided for stamp in stamps])
 
@@ -47,7 +47,7 @@ def inspect(snapshot):
         if noise_verdict.get(case.get('domain')) is True and
            (case.get('facts') or {}).get('current_failure') is True and
            len([item for item in ((case.get('facts') or {}).get('paths') or {}).values()
-                if (item.get('failed_samples') or 0) >= 1]) == 0 and
+                if (item.get('failed_samples') or 0) >= 1 or (item.get('success_samples') or 0) >= 1]) == 0 and
            (((case.get('decided_at') is not None) and (now - case.get('decided_at') >= 7200)) and
             (any([(item.get('sample_count') or 0) > 0
                   for item in ((case.get('facts') or {}).get('paths') or {}).values()]) or
@@ -153,14 +153,8 @@ def inspect(snapshot):
         d = case.get('domain')
         if d in unsupported and case.get('status') == 'open' and case.get('outcome') is None:
             unver = unver + [d]
-    unverifiable_only = bool(urgent_cases)
-    for case in urgent_cases:
-        if case.get('domain') not in unver:
-            unverifiable_only = False
-    burst_only = bool(urgent_cases)
-    for case in urgent_cases:
-        if case.get('domain') not in burst_domains:
-            burst_only = False
+    unverifiable_only = bool(urgent_cases) and all([c.get('domain') in unver for c in urgent_cases])
+    burst_only = bool(urgent_cases) and all([c.get('domain') in burst_domains for c in urgent_cases])
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
     noise_only = bool(urgent_cases) and all([case.get('domain') in reopen_noise_domains
@@ -168,10 +162,10 @@ def inspect(snapshot):
     selected = [case['id'] for case in (urgent_cases + normal_cases)][:16]
     wake = 'urgent' if (hard_faults or (urgent_cases and not noise_only)) else ('routine' if (normal_cases or urgent_cases) else 'none')
 
-    case_by_domain = {}
+    cbd = {}
     for case in urgent_cases + normal_cases:
         if case.get('domain'):
-            case_by_domain[case['domain']] = case
+            cbd[case['domain']] = case
 
     quiet_domains = set(reopen_noise_domains)
 
@@ -182,12 +176,12 @@ def inspect(snapshot):
               entry.get('domain') not in unver and
               entry.get('domain') not in burst_domains and
               entry.get('domain') not in unsupported and
-              not (case_by_domain.get(entry['domain']) and
-                   case_by_domain[entry['domain']].get('facts', {}).get('paths') and
+              not (cbd.get(entry['domain']) and
+                   cbd[entry['domain']].get('facts', {}).get('paths') and
                    (all([item.get('transport_ok') is False
-                         for item in case_by_domain[entry['domain']]['facts']['paths'].values()]) or
+                         for item in cbd[entry['domain']]['facts']['paths'].values()]) or
                     all([item.get('application_state') == 'rejected'
-                         for item in case_by_domain[entry['domain']]['facts']['paths'].values()])))][:3]
+                         for item in cbd[entry['domain']]['facts']['paths'].values()])))][:3]
 
     routing = snapshot.get('routing') or {}
     routes = [str(candidate['domain']) for candidate in (routing.get('candidates') or [])
