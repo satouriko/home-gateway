@@ -142,6 +142,10 @@
       "reason": "nonportable_test"
     },
     {
+      "name": "test_workflow_recovered_path_wake.py",
+      "reason": "nonportable_test"
+    },
+    {
       "name": "test_workflow_snapshot_contract.py",
       "reason": "nonportable_test"
     },

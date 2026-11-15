@@ -27,21 +27,14 @@ def inspect(snapshot):
     for case in candidate_cases:
         domain_now = case.get('domain')
         decided = case.get('decided_at') or 0
-        stamps = []
-        if case.get('last_observed_at') is not None:
-            stamps = stamps + [case.get('last_observed_at')]
-        stamps = stamps + [entry.get('last_failure_at') for entry in obs_domains
-                           if entry.get('domain') == domain_now
-                           and entry.get('last_failure_at') is not None]
-        for entry in biz_domains:
-            if entry.get('domain') == domain_now:
-                stamps = stamps + [issue.get('last_failure_at')
-                                   for issue in (entry.get('issues') or [])
-                                   if issue.get('last_failure_at') is not None]
-        if len(stamps) == 0:
-            noise_verdict[domain_now] = False
-        else:
-            noise_verdict[domain_now] = not any([stamp > decided for stamp in stamps])
+        stamps = [case.get('last_observed_at')] + [
+            entry.get('last_failure_at') for entry in obs_domains
+            if entry.get('domain') == domain_now] + [
+            issue.get('last_failure_at')
+            for entry in biz_domains if entry.get('domain') == domain_now
+            for issue in (entry.get('issues') or [])]
+        stamps = [stamp for stamp in stamps if stamp is not None]
+        noise_verdict[domain_now] = bool(stamps) and not any([stamp > decided for stamp in stamps])
 
     reopen_noise_domains = {case.get('domain') for case in flagged
         if noise_verdict.get(case.get('domain')) is True and
@@ -153,17 +146,16 @@ def inspect(snapshot):
         d = case.get('domain')
         if d in unsupported and case.get('status') == 'open' and case.get('outcome') is None:
             unver = unver + [d]
-    unverifiable_only = bool(urgent_cases)
-    for case in urgent_cases:
-        if case.get('domain') not in unver:
-            unverifiable_only = False
-    burst_only = bool(urgent_cases)
-    for case in urgent_cases:
-        if case.get('domain') not in burst_domains:
-            burst_only = False
+    unverifiable_only = bool(urgent_cases) and all([case.get('domain') in unver for case in urgent_cases])
+    burst_only = bool(urgent_cases) and all([case.get('domain') in burst_domains for case in urgent_cases])
     normal_cases = [case for case in incidents
                     if case.get('priority') == 'normal' and case.get('requires_attention') is True]
+    recovered_path_ids = [case.get('id') for case in urgent_cases if
+                          (case.get('facts') or {}).get('kind') == 'path_fault' and
+                          (case.get('facts') or {}).get('current_failure') is False and
+                          (case.get('facts') or {}).get('verified_recovery') is True]
     noise_only = bool(urgent_cases) and all([case.get('domain') in reopen_noise_domains
+                                             or case.get('id') in recovered_path_ids
                                              for case in urgent_cases])
     selected = [case['id'] for case in (urgent_cases + normal_cases)][:16]
     wake = 'urgent' if (hard_faults or (urgent_cases and not noise_only)) else ('routine' if (normal_cases or urgent_cases) else 'none')
@@ -214,7 +206,7 @@ def inspect(snapshot):
     elif urgent_cases:
         summary = '%d 个紧急事件待处理；按证据复核并保留有限复查期限。' % len(urgent_cases)
         if noise_only:
-            summary = summary + '其中仅探测签名变化、且已确认无新客户端失败，停止重复探测并放宽复查，避免自持重开。'
+            summary = summary + '其中无当前失败证据或仅探测签名变化，放宽复查、避免自持重开；不表示业务恢复。'
         if burst_only:
             summary = summary + '其中零字节后台重试在刚处置后继续，属同一未恢复问题；保留记录并按15分钟复查，不重复探测轮换端口。'
         if unverifiable_only:
